@@ -69,7 +69,7 @@ def extract_stream_from_embed(embed_url):
     if 'File is no longer available' in html or res.status_code != 200:
       return None, None
 
-    # 1. دعم سيرفرات VK (vk.com)
+    # 1. دعم سيرفرات VK
     if 'vk.com' in embed_url:
       vk_matches = re.findall(
           r'https?:\\/\\/[^\s"\'<>\\]+?\.(?:mp4|m3u8)[^\s"\'<>\\]*', html
@@ -87,7 +87,7 @@ def extract_stream_from_embed(embed_url):
         r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', html
     )
 
-    # 3. فك تشفير Packed JS (مثل Rty1 / Mp4 / Ok / Larhu)
+    # 3. فك تشفير Packed JS
     if not m3u8_matches and 'eval(function(p,a,c,k,e' in html:
       unpacked = unpack_js(html)
       m3u8_matches = re.findall(
@@ -110,15 +110,25 @@ def extract_stream_from_embed(embed_url):
   return None, None
 
 
-# 1️⃣ القائمة الرئيسية (Catalog)
+# 1️⃣ الكاتالوج الشامل (يدعم الأفلام والمسلسلات عبر ?type=series)
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
   page = request.args.get('page', '1')
-  url = (
-      f'{BASE_URL}/'
-      if page == '1'
-      else f'{BASE_URL}/index.php?page={page}'
-  )
+  content_type = request.args.get('type', 'movies').lower()
+
+  if content_type == 'series':
+    url = (
+        f'{BASE_URL}/all-series.php'
+        if page == '1'
+        else f'{BASE_URL}/all-series.php?page={page}'
+    )
+  else:
+    url = (
+        f'{BASE_URL}/'
+        if page == '1'
+        else f'{BASE_URL}/index.php?page={page}'
+    )
+
   try:
     res = requests.get(url, headers=HEADERS, timeout=10)
     soup = BeautifulSoup(res.text, 'html.parser')
@@ -146,12 +156,16 @@ def get_catalog():
         if m:
           poster = m.group(1)
 
+      if not poster and post.find('img'):
+        img = post.find('img')
+        poster = img.get('src') or img.get('data-src') or ''
+
       if poster and not poster.startswith('http'):
-        poster = f'{BASE_URL}/{poster}'
+        poster = f"{BASE_URL}/{poster.lstrip('/')}"
       if title:
         items.append({'vid': vid, 'title': title, 'poster': poster})
 
-    return jsonify({'status': 'success', 'data': items})
+    return jsonify({'status': 'success', 'type': content_type, 'data': items})
   except Exception as e:
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
@@ -195,7 +209,7 @@ def search():
           poster = img.get('src') or img.get('data-src') or ''
 
       if poster and not poster.startswith('http'):
-        poster = f'{BASE_URL}/{poster}'
+        poster = f"{BASE_URL}/{poster.lstrip('/')}"
 
       if title and len(title) > 3 and 'صفحة' not in title:
         seen.add(vid)
@@ -232,7 +246,7 @@ def get_details():
         poster_el.get('src') or poster_el.get('data-src') if poster_el else ''
     )
     if poster and not poster.startswith('http'):
-      poster = f'{BASE_URL}/{poster}'
+      poster = f"{BASE_URL}/{poster.lstrip('/')}"
 
     story_el = (
         soup.select_one('.story')
@@ -266,7 +280,7 @@ def get_details():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 4️⃣ اقتناص رابط البث الشامل (Multi-Server Stream Fetcher)
+# 4️⃣ اقتناص رابط البث المباشر (Multi-Server Stream Fetcher)
 @app.route('/api/stream', methods=['GET'])
 def get_stream():
   vid = request.args.get('vid', '')
@@ -283,7 +297,7 @@ def get_stream():
     for srv in servers:
       srv_id = srv.get('id', '').lower()
       if 'vidoba' in srv_id:
-        continue  # تجاوز سيرفر Vidoba بسبب قيود الـ IP
+        continue  # تجاوز Vidoba المقيد بـ IP
 
       embed_attr = srv.get('data-embed', '')
       match = re.search(r'src=["\']([^"\']+)["\']', embed_attr)
