@@ -209,28 +209,36 @@ def get_home():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 2️⃣ الكاتالوج الشامل مع تصفح الأقسام (/api/catalog)
+
+# 2️⃣ الكاتالوج الشامل المطور بدعم التصفح اللانهائي (Pagination)
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
-  page = request.args.get('page', '1')
+  page = int(request.args.get('page', '1'))
   cat_key = request.args.get('cat', 'movies').lower()
+  limit = int(request.args.get('limit', '30'))  # رفع الحد الإفتراضي إلى 30
 
   discovered_cats = discover_category_urls()
 
   if cat_key in discovered_cats:
     cat_data = discovered_cats[cat_key]
     items = fetch_perfect_category_items(
-        cat_data['url'], content_type=cat_data['type'], limit=20
+        cat_data['url'], content_type=cat_data['type'], limit=limit, start_page=page
     )
   else:
     url = (
         f'{BASE_URL}/'
-        if page == '1'
+        if page == 1
         else f'{BASE_URL}/index.php?page={page}'
     )
-    items = fetch_perfect_category_items(url, content_type='any', limit=20)
+    items = fetch_perfect_category_items(url, content_type='any', limit=limit, start_page=page)
 
-  return jsonify({'status': 'success', 'cat': cat_key, 'data': items})
+  return jsonify({'status': 'success', 'page': page, 'cat': cat_key, 'data': items})
+
+
+
+
+
+
 
 
 # 3️⃣ البحث المباشر (Search)
