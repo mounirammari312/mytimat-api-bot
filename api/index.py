@@ -16,7 +16,7 @@ HEADERS = {
 
 
 def unpack_js(packed_code):
-  """دالة فك تشفير كود Packed JS المخبأ داخل السيرفرات"""
+  """دالة فك تشفير كود Packed JS المخبأ"""
   try:
     pattern = (
         r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)"
@@ -24,6 +24,7 @@ def unpack_js(packed_code):
     match = re.search(pattern, packed_code, re.DOTALL)
     if not match:
       return ''
+
     payload, base_str, count_str, keywords_str = match.groups()
     base, count, keywords = (
         int(base_str),
@@ -54,6 +55,62 @@ def unpack_js(packed_code):
     return ''
 
 
+def extract_stream_from_embed(embed_url):
+  """استخراج رابط البث من مختلف خوادم المشاهدة"""
+  try:
+    req_headers = {'User-Agent': HEADERS['User-Agent'], 'Referer': embed_url}
+    res = requests.get(
+        embed_url,
+        headers={'User-Agent': HEADERS['User-Agent'], 'Referer': BASE_URL},
+        timeout=8,
+    )
+    html = res.text
+
+    if 'File is no longer available' in html or res.status_code != 200:
+      return None, None
+
+    # 1. دعم سيرفرات VK (vk.com)
+    if 'vk.com' in embed_url:
+      vk_matches = re.findall(
+          r'https?:\\/\\/[^\s"\'<>\\]+?\.(?:mp4|m3u8)[^\s"\'<>\\]*', html
+      )
+      if not vk_matches:
+        vk_matches = re.findall(
+            r'https?://[^\s"\'<>]+?\.(?:mp4|m3u8)[^\s"\'<>]*', html
+        )
+      if vk_matches:
+        clean_url = vk_matches[-1].replace('\\/', '/')
+        return clean_url, {'User-Agent': HEADERS['User-Agent']}
+
+    # 2. البحث الصريح عن m3u8 أو mp4
+    m3u8_matches = re.findall(
+        r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', html
+    )
+
+    # 3. فك تشفير Packed JS (مثل Rty1 / Mp4 / Ok / Larhu)
+    if not m3u8_matches and 'eval(function(p,a,c,k,e' in html:
+      unpacked = unpack_js(html)
+      m3u8_matches = re.findall(
+          r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', unpacked
+      )
+      if not m3u8_matches:
+        fm = re.search(
+            r'file\s*:\s*["\']([^"\']+\.(?:m3u8|mp4)[^"\']*)["\']', unpacked
+        )
+        if fm:
+          m3u8_matches = [fm.group(1)]
+
+    if m3u8_matches:
+      stream_url = list(set(m3u8_matches))[0]
+      return stream_url, req_headers
+
+  except Exception:
+    pass
+
+  return None, None
+
+
+# 1️⃣ القائمة الرئيسية (Catalog)
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
   page = request.args.get('page', '1')
@@ -99,6 +156,7 @@ def get_catalog():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+# 2️⃣ البحث المباشر (Search)
 @app.route('/api/search', methods=['GET'])
 def search():
   query = request.args.get('q', '')
@@ -148,6 +206,7 @@ def search():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+# 3️⃣ التفاصيل والحلقات (Details & Episodes)
 @app.route('/api/details', methods=['GET'])
 def get_details():
   vid = request.args.get('vid', '')
@@ -207,6 +266,7 @@ def get_details():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+# 4️⃣ اقتناص رابط البث الشامل (Multi-Server Stream Fetcher)
 @app.route('/api/stream', methods=['GET'])
 def get_stream():
   vid = request.args.get('vid', '')
@@ -220,16 +280,10 @@ def get_stream():
 
     servers = soup.select('li[id*="server"], li[data-embed]')
 
-    # ترشيح وتدقيق السيرفرات: تقديم السيرفرات الموثوقة مثل Rty1 / Vidspeed / Filemoon واستبعاد Vidoba
-    sorted_servers = sorted(
-        servers,
-        key=lambda s: 0 if 'rty' in s.get('id', '').lower() else 1,
-    )
-
-    for srv in sorted_servers:
+    for srv in servers:
       srv_id = srv.get('id', '').lower()
       if 'vidoba' in srv_id:
-        continue  # تجاوز سيرفر Vidoba بسبب قيود IP الحصري
+        continue  # تجاوز سيرفر Vidoba بسبب قيود الـ IP
 
       embed_attr = srv.get('data-embed', '')
       match = re.search(r'src=["\']([^"\']+)["\']', embed_attr)
@@ -238,48 +292,16 @@ def get_stream():
       if not embed_url or not embed_url.startswith('http'):
         continue
 
-      try:
-        srv_res = requests.get(
-            embed_url, headers={'Referer': f'{BASE_URL}/'}, timeout=8
-        )
-        html_text = srv_res.text
+      stream_url, req_headers = extract_stream_from_embed(embed_url)
 
-        if (
-            'File is no longer available' in html_text
-            or srv_res.status_code != 200
-        ):
-          continue
-
-        m3u8_matches = re.findall(
-            r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', html_text
-        )
-
-        if not m3u8_matches and 'eval(function(p,a,c,k,e' in html_text:
-          unpacked_text = unpack_js(html_text)
-          m3u8_matches = re.findall(
-              r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', unpacked_text
-          )
-          if not m3u8_matches:
-            file_match = re.search(
-                r'file\s*:\s*["\']([^"\']+\.m3u8[^"\']*)["\']', unpacked_text
-            )
-            if file_match:
-              m3u8_matches = [file_match.group(1)]
-
-        if m3u8_matches:
-          stream_url = list(set(m3u8_matches))[0]
-          return jsonify({
-              'status': 'success',
-              'data': {
-                  'stream_url': stream_url,
-                  'headers': {
-                      'Referer': embed_url,
-                      'User-Agent': HEADERS['User-Agent'],
-                  },
-              },
-          })
-      except Exception:
-        continue
+      if stream_url:
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'stream_url': stream_url,
+                'headers': req_headers,
+            },
+        })
 
     return jsonify(
         {'status': 'error', 'message': 'Failed to extract stream link'}
