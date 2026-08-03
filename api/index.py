@@ -186,27 +186,65 @@ def unpack_js(packed_code):
     return ''
 
 
-# 1️⃣ الواجهة الرئيسية الاحترافية نمط Netflix / Shahid (/api/home)
+# 1️⃣ الواجهة الرئيسية الشاملة لجميع أقسام الموقع (/api/home)
 @app.route('/api/home', methods=['GET'])
 def get_home():
   try:
-    discovered_cats = discover_category_urls()
-    sections = []
+    res = requests.get(BASE_URL, headers=HEADERS, timeout=10)
+    soup = BeautifulSoup(res.text, 'html.parser')
 
-    for cat_key, cat_data in discovered_cats.items():
-      items = fetch_perfect_category_items(
-          cat_data['url'], content_type=cat_data['type'], limit=10
-      )
-      if items:
-        sections.append({
-            'key': cat_key,
-            'title': cat_data['title'],
-            'items': items,
-        })
+    sections = []
+    seen_urls = set()
+
+    # قراءة كل قسم موجود في قائمة الموقع العلوي وتحويله لصف في الشاشة الرئيسية
+    for a in soup.find_all('a', href=True):
+      href = a['href']
+      title = a.get_text(strip=True)
+
+      if 'category.php' in href or 'all-series.php' in href:
+        full_url = (
+            href
+            if href.startswith('http')
+            else f"{BASE_URL}/{href.lstrip('/')}"
+        )
+
+        if (
+            full_url not in seen_urls
+            and title
+            and len(title) > 2
+            and 'الرئيسية' not in title
+        ):
+          seen_urls.add(full_url)
+
+          c_type = (
+              'series'
+              if ('مسلسل' in title or 'series' in href.lower())
+              else 'movies'
+          )
+          cat_slug = href.split('cat=')[-1] if 'cat=' in href else 'all'
+
+          # جلب 8 أعمال فريدة وممتازة لهذا القسم
+          items = fetch_perfect_category_items(
+              full_url, content_type=c_type, limit=8
+          )
+
+          if items:
+            sections.append({
+                'key': cat_slug,
+                'title': title,
+                'items': items,
+            })
 
     return jsonify({'status': 'success', 'data': sections})
   except Exception as e:
     return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+
+
+
+
+
 
 
 
