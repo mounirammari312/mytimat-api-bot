@@ -14,6 +14,30 @@ HEADERS = {
     'Referer': f'{BASE_URL}/',
 }
 
+# خريطة الأقسام والتصنيفات في الموقع
+CATEGORIES = {
+    'foreign_movies': {
+        'title': '🎬 أفلام أجنبية',
+        'url': f'{BASE_URL}/category.php?cat=ajnbe11',
+    },
+    'foreign_series': {
+        'title': '📺 مسلسلات أجنبية',
+        'url': f'{BASE_URL}/category.php?cat=Foreign-series-2025',
+    },
+    'turkish_series': {
+        'title': '🇹🇷 مسلسلات تركية',
+        'url': f'{BASE_URL}/category.php?cat=Turkish-series-2026',
+    },
+    'arabic_movies': {
+        'title': '🔥 أفلام عربية',
+        'url': f'{BASE_URL}/category.php?cat=aflam-arbe11',
+    },
+    'arabic_series': {
+        'title': '🌙 مسلسلات عربية',
+        'url': f'{BASE_URL}/category.php?cat=Arabic-TV-series-2026',
+    },
+}
+
 
 def unpack_js(packed_code):
   """دالة فك تشفير كود Packed JS المخبأ"""
@@ -55,76 +79,85 @@ def unpack_js(packed_code):
     return ''
 
 
-def extract_stream_from_embed(embed_url):
-  """استخراج رابط البث من مختلف خوادم المشاهدة (بما فيها Vidspeed و Rty1)"""
+def scrape_category_items(url, limit=15):
+  """دالة مساعدة لجلب العناصر من رابط قسم معين"""
   try:
-    req_headers = {'User-Agent': HEADERS['User-Agent'], 'Referer': embed_url}
-    res = requests.get(
-        embed_url,
-        headers={'User-Agent': HEADERS['User-Agent'], 'Referer': BASE_URL},
-        timeout=8,
-    )
-    html = res.text
+    res = requests.get(url, headers=HEADERS, timeout=8)
+    soup = BeautifulSoup(res.text, 'html.parser')
+    items = []
+    seen = set()
 
-    if 'File is no longer available' in html or res.status_code != 200:
-      return None, None
+    for post in soup.select('.block-post, li:has(div.imgSer), a[href*="vid="]'):
+      a_tag = post if post.name == 'a' else post.find('a', href=True)
+      if not a_tag or 'vid=' not in a_tag.get('href', ''):
+        continue
 
-    # 1. دعم سيرفرات VK (vk.com)
-    if 'vk.com' in embed_url:
-      vk_matches = re.findall(
-          r'https?:\\/\\/[^\s"\'<>\\]+?\.(?:mp4|m3u8)[^\s"\'<>\\]*', html
-      )
-      if not vk_matches:
-        vk_matches = re.findall(
-            r'https?://[^\s"\'<>]+?\.(?:mp4|m3u8)[^\s"\'<>]*', html
-        )
-      if vk_matches:
-        clean_url = vk_matches[-1].replace('\\/', '/')
-        return clean_url, {'User-Agent': HEADERS['User-Agent']}
+      vid = a_tag['href'].split('vid=')[-1]
+      if vid in seen:
+        continue
 
-    # 2. البحث الصريح عن روابط m3u8 أو mp4 (يدعم Vidspeed / Rty1 / Mp4 / Ok)
-    m3u8_matches = re.findall(
-        r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', html
-    )
+      title = a_tag.get('title', '').strip() or a_tag.get_text(strip=True)
 
-    # 3. فك تشفير Packed JS
-    if not m3u8_matches and 'eval(function(p,a,c,k,e' in html:
-      unpacked = unpack_js(html)
-      m3u8_matches = re.findall(
-          r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', unpacked
-      )
-      if not m3u8_matches:
-        fm = re.search(
-            r'file\s*:\s*["\']([^"\']+\.(?:m3u8|mp4)[^"\']*)["\']', unpacked
-        )
-        if fm:
-          m3u8_matches = [fm.group(1)]
+      poster = ''
+      if post.name != 'a':
+        img_ser = post.find('div', class_='imgSer')
+        if img_ser and img_ser.get('style'):
+          m = re.search(r"url\(['\"]?(.*?)['\"]?\)", img_ser['style'])
+          if m:
+            poster = m.group(1)
 
-    # 4. البحث داخل مصفوفات JWPlayer (خاص ببعض خوادم الأفلام الأجنبية)
-    if not m3u8_matches:
-      sources_match = re.findall(
-          r'sources\s*:\s*\[\s*\{\s*file\s*:\s*["\']([^"\']+)["\']', html
-      )
-      if sources_match:
-        m3u8_matches = sources_match
+      if not poster and post.find('img'):
+        img = post.find('img')
+        poster = img.get('src') or img.get('data-src') or ''
 
-    if m3u8_matches:
-      stream_url = list(set(m3u8_matches))[0]
-      return stream_url, req_headers
+      if poster and not poster.startswith('http'):
+        poster = f"{BASE_URL}/{poster.lstrip('/')}"
 
+      if title and len(title) > 3 and 'صفحة' not in title:
+        seen.add(vid)
+        items.append({'vid': vid, 'title': title, 'poster': poster})
+        if len(items) >= limit:
+          break
+
+    return items
   except Exception:
-    pass
-
-  return None, None
+    return []
 
 
-# 1️⃣ الكاتالوج الشامل (يدعم الأفلام والمسلسلات عبر ?type=series)
+# 1️⃣ الواجهة الرئيسية بنمط نتفلكس وشاهد (Netflix/Shahid Home API)
+@app.route('/api/home', methods=['GET'])
+def get_home():
+  try:
+    sections = []
+
+    for cat_key, cat_info in CATEGORIES.items():
+      items = scrape_category_items(cat_info['url'], limit=15)
+      if items:
+        sections.append({
+            'key': cat_key,
+            'title': cat_info['title'],
+            'items': items,
+        })
+
+    return jsonify({'status': 'success', 'data': sections})
+  except Exception as e:
+    return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# 2️⃣ الكاتالوج الشامل مع دعم التصفح بالأقسام (?cat=foreign_movies)
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
   page = request.args.get('page', '1')
-  content_type = request.args.get('type', 'movies').lower()
+  cat_key = request.args.get('cat', 'movies').lower()
 
-  if content_type == 'series':
+  if cat_key in CATEGORIES:
+    base_cat_url = CATEGORIES[cat_key]['url']
+    url = (
+        base_cat_url
+        if page == '1'
+        else f"{base_cat_url}&page={page}"
+    )
+  elif cat_key == 'series':
     url = (
         f'{BASE_URL}/all-series.php'
         if page == '1'
@@ -137,98 +170,25 @@ def get_catalog():
         else f'{BASE_URL}/index.php?page={page}'
     )
 
-  try:
-    res = requests.get(url, headers=HEADERS, timeout=10)
-    soup = BeautifulSoup(res.text, 'html.parser')
-    items = []
-    seen = set()
-
-    for post in soup.select('.block-post, li:has(div.imgSer)'):
-      a_tag = post.find('a', href=True)
-      if not a_tag or 'vid=' not in a_tag['href']:
-        continue
-      vid = a_tag['href'].split('vid=')[-1]
-      if vid in seen:
-        continue
-      seen.add(vid)
-
-      title = a_tag.get('title', '').strip() or (
-          post.find('div', class_='title').get_text(strip=True)
-          if post.find('div', class_='title')
-          else ''
-      )
-      poster = ''
-      img_ser = post.find('div', class_='imgSer')
-      if img_ser and img_ser.get('style'):
-        m = re.search(r"url\(['\"]?(.*?)['\"]?\)", img_ser['style'])
-        if m:
-          poster = m.group(1)
-
-      if not poster and post.find('img'):
-        img = post.find('img')
-        poster = img.get('src') or img.get('data-src') or ''
-
-      if poster and not poster.startswith('http'):
-        poster = f"{BASE_URL}/{poster.lstrip('/')}"
-      if title:
-        items.append({'vid': vid, 'title': title, 'poster': poster})
-
-    return jsonify({'status': 'success', 'type': content_type, 'data': items})
-  except Exception as e:
-    return jsonify({'status': 'error', 'message': str(e)}), 500
+  items = scrape_category_items(url, limit=30)
+  return jsonify({'status': 'success', 'cat': cat_key, 'data': items})
 
 
-# 2️⃣ البحث المباشر (Search)
+# 3️⃣ البحث المباشر (Search)
 @app.route('/api/search', methods=['GET'])
 def search():
   query = request.args.get('q', '')
   if not query:
     return jsonify({'status': 'error', 'message': 'Query missing'}), 400
   try:
-    res = requests.get(
-        f'{BASE_URL}/search.php?keywords={query}', headers=HEADERS, timeout=10
-    )
-    soup = BeautifulSoup(res.text, 'html.parser')
-    items = []
-    seen = set()
-
-    for a in soup.find_all('a', href=lambda h: h and 'vid=' in h):
-      vid = a['href'].split('vid=')[-1]
-      if vid in seen:
-        continue
-      title = a.get('title', '').strip() or a.get_text(strip=True)
-      container = (
-          a.find_parent(class_=re.compile(r'block|item|thumb|video|post'))
-          or a.parent
-          or a
-      )
-
-      poster = ''
-      img_ser = container.find('div', class_='imgSer') or a.find(
-          'div', class_='imgSer'
-      )
-      if img_ser and img_ser.get('style'):
-        m = re.search(r"url\(['\"]?(.*?)['\"]?\)", img_ser['style'])
-        if m:
-          poster = m.group(1)
-      if not poster:
-        img = container.find('img') or a.find('img')
-        if img:
-          poster = img.get('src') or img.get('data-src') or ''
-
-      if poster and not poster.startswith('http'):
-        poster = f"{BASE_URL}/{poster.lstrip('/')}"
-
-      if title and len(title) > 3 and 'صفحة' not in title:
-        seen.add(vid)
-        items.append({'vid': vid, 'title': title, 'poster': poster})
-
+    url = f'{BASE_URL}/search.php?keywords={query}'
+    items = scrape_category_items(url, limit=40)
     return jsonify({'status': 'success', 'data': items})
   except Exception as e:
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 3️⃣ التفاصيل والحلقات (تصفية أزرار التنقل وترتيب الحلقات تصاعدياً)
+# 4️⃣ التفاصيل والحلقات (Details & Episodes)
 @app.route('/api/details', methods=['GET'])
 def get_details():
   vid = request.args.get('vid', '')
@@ -265,8 +225,6 @@ def get_details():
 
     episodes = []
     seen_vids = set()
-
-    # كلمات مستبعدة (تمنع جلب أزرار التنقل والروابط العشوائية)
     IGNORE_KEYWORDS = [
         'السابقة',
         'التالية',
@@ -282,19 +240,16 @@ def get_details():
 
       if ('watch.php?vid=' in href or 'play.php?vid=' in href) and ep_title:
         ep_vid = href.split('vid=')[-1]
-
-        # استبعاد نفس الصفحة والأنواع المكررة
-        if ep_vid == vid or ep_vid in seen_vids:
-          continue
-
-        # استبعاد أزرار التنقل والكلمات العشوائية
-        if any(kw in ep_title for kw in IGNORE_KEYWORDS):
+        if (
+            ep_vid == vid
+            or ep_vid in seen_vids
+            or any(kw in ep_title for kw in IGNORE_KEYWORDS)
+        ):
           continue
 
         seen_vids.add(ep_vid)
         episodes.append({'vid': ep_vid, 'title': ep_title})
 
-    # استخراج رقم الحلقة وترتيب القائمة تصاعدياً (من الحلقة 1 إلى الأخيرة)
     def get_episode_number(item):
       match = re.search(r'(?:الحلقة|حلقة)\s*(\d+)', item['title'])
       return int(match.group(1)) if match else 9999
@@ -315,18 +270,7 @@ def get_details():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-
-
-      
-        
-
-
-
-
-
-
-
-# 4️⃣ اقتناص رابط البث المباشر المطور (الأولية لـ Vidspeed / Rty1 / VK / Mp4)
+# 5️⃣ اقتناص رابط البث المباشر (Multi-Server Stream Fetcher)
 @app.route('/api/stream', methods=['GET'])
 def get_stream():
   vid = request.args.get('vid', '')
@@ -340,13 +284,10 @@ def get_stream():
 
     servers = soup.select('li[id*="server"], li[data-embed]')
 
-    # ترتيب السيرفرات بذكاء: وضع السيرفرات القوية والشغالة أولاً وتجاوز المعطوبة
     def server_priority(s):
       sid = s.get('id', '').lower()
       if 'vidspeed' in sid or 'rty' in sid or 'vk' in sid or 'mp4' in sid:
-        return 0  # أولوية قصوى
-      if 'filemoon' in sid or 'vidmoly' in sid or 'vidoba' in sid:
-        return 2  # استبعاد أو أولوية منخفضة
+        return 0
       return 1
 
     sorted_servers = sorted(servers, key=server_priority)
@@ -354,7 +295,7 @@ def get_stream():
     for srv in sorted_servers:
       srv_id = srv.get('id', '').lower()
       if 'vidoba' in srv_id or 'filemoon' in srv_id or 'vidmoly' in srv_id:
-        continue  # تجاوز السيرفرات المعطوبة أو المقيدة بـ IP
+        continue
 
       embed_attr = srv.get('data-embed', '')
       match = re.search(r'src=["\']([^"\']+)["\']', embed_attr)
@@ -363,16 +304,70 @@ def get_stream():
       if not embed_url or not embed_url.startswith('http'):
         continue
 
-      stream_url, req_headers = extract_stream_from_embed(embed_url)
-
-      if stream_url:
-        return jsonify({
-            'status': 'success',
-            'data': {
-                'stream_url': stream_url,
-                'headers': req_headers,
+      try:
+        req_headers = {
+            'User-Agent': HEADERS['User-Agent'],
+            'Referer': embed_url,
+        }
+        srv_res = requests.get(
+            embed_url,
+            headers={
+                'User-Agent': HEADERS['User-Agent'],
+                'Referer': BASE_URL,
             },
-        })
+            timeout=8,
+        )
+        html = srv_res.text
+
+        if (
+            'File is no longer available' in html
+            or srv_res.status_code != 200
+        ):
+          continue
+
+        if 'vk.com' in embed_url:
+          vk_matches = re.findall(
+              r'https?:\\/\\/[^\s"\'<>\\]+?\.(?:mp4|m3u8)[^\s"\'<>\\]*',
+              html,
+          )
+          if vk_matches:
+            clean_url = vk_matches[-1].replace('\\/', '/')
+            return jsonify({
+                'status': 'success',
+                'data': {
+                    'stream_url': clean_url,
+                    'headers': {'User-Agent': HEADERS['User-Agent']},
+                },
+            })
+
+        m3u8_matches = re.findall(
+            r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', html
+        )
+
+        if not m3u8_matches and 'eval(function(p,a,c,k,e' in html:
+          unpacked = unpack_js(html)
+          m3u8_matches = re.findall(
+              r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', unpacked
+          )
+          if not m3u8_matches:
+            fm = re.search(
+                r'file\s*:\s*["\']([^"\']+\.(?:m3u8|mp4)[^"\']*)["\']',
+                unpacked,
+            )
+            if fm:
+              m3u8_matches = [fm.group(1)]
+
+        if m3u8_matches:
+          stream_url = list(set(m3u8_matches))[0]
+          return jsonify({
+              'status': 'success',
+              'data': {
+                  'stream_url': stream_url,
+                  'headers': req_headers,
+              },
+          })
+      except Exception:
+        continue
 
     return jsonify(
         {'status': 'error', 'message': 'Failed to extract stream link'}
