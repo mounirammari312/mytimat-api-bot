@@ -17,7 +17,7 @@ HEADERS = {
 
 
 def normalize_text(text):
-  """توحيد النصوص العربية لمنع التكرار"""
+  """توحيد النصوص العربية لمنع تكرار الأحرف والهمزات"""
   if not text:
     return ''
   text = re.sub(r'[أإآ]', 'ا', text)
@@ -46,7 +46,7 @@ def clean_series_title(raw_title):
 
 
 def unpack_js(packed_code):
-  """دالة فك تشفير كود Packed JS المخبأ"""
+  """فك تشفير كود Packed JS المخبأ (Vidspeed / Rty1)"""
   try:
     pattern = (
         r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)"
@@ -86,7 +86,7 @@ def unpack_js(packed_code):
 
 
 def extract_stream_from_embed(embed_url):
-  """استخراج رابط البث المباشر المطور مع دعم التوكنات ومشغلات HLS/Clappr"""
+  """استخراج رابط البث المباشر المطور مع التوكنات وتجاوز الحظر"""
   try:
     if embed_url.startswith('//'):
       embed_url = 'https:' + embed_url
@@ -95,61 +95,34 @@ def extract_stream_from_embed(embed_url):
     res = requests.get(
         embed_url,
         headers={'User-Agent': HEADERS['User-Agent'], 'Referer': BASE_URL},
-        timeout=8,
+        timeout=6,
         allow_redirects=True,
     )
-    html = res.text
-
-    if 'File is no longer available' in html or res.status_code != 200:
+    if 'File is no longer available' in res.text or res.status_code != 200:
       return None, None
 
-    html_clean = html.replace('\\/', '/')
+    html_clean = res.text.replace('\\/', '/')
 
-    # 1️⃣ البحث عن روابط m3u8 أو mp4 مع دعم معلمات التوكنات (?token=...)
+    # 1️⃣ البحث عن روابط m3u8 أو mp4
     stream_matches = re.findall(
         r'(?:https?:)?//[^\s"\'<>\\]+?\.(?:m3u8|mp4)[^\s"\'<>\\]*', html_clean
     )
 
     # 2️⃣ فك تشفير Packed JS عند وجود كود eval
-    if not stream_matches and 'eval(function(p,a,c,k,e' in html:
-      unpacked = unpack_js(html)
+    if not stream_matches and 'eval(function' in res.text:
+      unpacked = unpack_js(res.text)
       if unpacked:
         unpacked_clean = unpacked.replace('\\/', '/')
         stream_matches = re.findall(
             r'(?:https?:)?//[^\s"\'<>\\]+?\.(?:m3u8|mp4)[^\s"\'<>\\]*',
             unpacked_clean,
         )
-        if not stream_matches:
-          fm = re.search(
-              r'(?:file|source|src)\s*:\s*["\']([^"\']+\.(?:m3u8|mp4)[^"\']*)["\']',
-              unpacked_clean,
-          )
-          if fm:
-            stream_matches = [fm.group(1)]
-
-    # 3️⃣ دعم أنماط الجافاسكريبت الحديثة (Clappr / HLS.js / JWPlayer)
-    if not stream_matches:
-      js_patterns = [
-          (
-              r'(?:file|source|src|loadSource)\s*[:\(]\s*["\']([^"\']+\.(?:m3u8|mp4)[^"\']*)["\']'
-          ),
-          r'["\']((?:https?:)?//[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*)"',
-      ]
-      for pat in js_patterns:
-        fm = re.findall(pat, html_clean)
-        if fm:
-          stream_matches.extend(fm)
 
     if stream_matches:
-      clean_urls = []
-      for url in stream_matches:
-        if url.startswith('//'):
-          url = 'https:' + url
-        url = url.split('&amp;')[0]
-        clean_urls.append(url)
-
-      if clean_urls:
-        return clean_urls[0], req_headers
+      clean_url = stream_matches[0]
+      if clean_url.startswith('//'):
+        clean_url = 'https:' + clean_url
+      return clean_url.split('&amp;')[0], req_headers
 
   except Exception:
     pass
@@ -439,7 +412,7 @@ def get_details():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 6️⃣ اقتناص رابط البث الشامل والمعدل لجميع الأفلام والمسلسلات (/api/stream)
+# 6️⃣ نقطة اقتناص البث المتعدد الشاملة لجميع السيرفرات (/api/stream)
 @app.route('/api/stream', methods=['GET'])
 def get_stream():
   vid = request.args.get('vid', '')
@@ -448,23 +421,24 @@ def get_stream():
 
   play_url = f'{BASE_URL}/play.php?vid={vid}'
   try:
-    res = requests.get(play_url, headers=HEADERS, timeout=10)
+    res = requests.get(play_url, headers=HEADERS, timeout=8)
     soup = BeautifulSoup(res.text, 'html.parser')
 
     targets = []
 
-    # أ) جلب الـ iframe المباشر الموجود في أعلى الصفحة الرئيسية
+    # أ) جلب المشغل المباشر الرئيسي
     for iframe in soup.select('iframe[src], iframe[data-src]'):
       src = iframe.get('src') or iframe.get('data-src')
       if src and 'facebook' not in src and 'google' not in src:
-        targets.append(src)
+        targets.append(('سيرفر رئيسي', src))
 
-    # ب) جلب قائمة السيرفرات والأزرار
+    # ب) جلب قائمة السيرفرات المتاحة
     servers = soup.select(
         'li[id*="server"], li[data-embed], .servers-list li, ul.servers li,'
         ' [data-url], [data-embed]'
     )
     for srv in servers:
+      srv_name = srv.get_text(strip=True) or srv.get('id', 'سيرفر احتياطي')
       raw_embed = ''
       for attr in [
           'data-embed',
@@ -480,12 +454,12 @@ def get_stream():
           break
 
       if not raw_embed:
-        iframe = srv.find('iframe')
-        if iframe and iframe.get('src'):
-          raw_embed = iframe.get('src')
+        ifr = srv.find('iframe')
+        if ifr and ifr.get('src'):
+          raw_embed = ifr.get('src')
 
       if raw_embed:
-        raw_embed = html_module.unescape(raw_embed)
+        raw_embed = html_module.unescape(str(raw_embed))
         match_src = re.search(
             r'(?:src|href)=["\']([^"\']+)["\']', raw_embed, re.IGNORECASE
         )
@@ -499,10 +473,12 @@ def get_stream():
             )
         )
         if embed_url:
-          targets.append(embed_url)
+          targets.append((srv_name, embed_url))
 
-    # فحص الأهداف وتمريرها لاستخراج الرابط
-    for embed_url in targets:
+    working_servers = []
+    seen_urls = set()
+
+    for s_name, embed_url in targets:
       if not embed_url or (
           not embed_url.startswith('http') and not embed_url.startswith('//')
       ):
@@ -511,17 +487,28 @@ def get_stream():
       embed_url = embed_url.rstrip('"\'>;')
       stream_url, req_headers = extract_stream_from_embed(embed_url)
 
-      if stream_url:
-        return jsonify({
-            'status': 'success',
-            'data': {
-                'stream_url': stream_url,
-                'headers': req_headers,
-            },
+      if stream_url and stream_url not in seen_urls:
+        seen_urls.add(stream_url)
+        working_servers.append({
+            'id': len(working_servers) + 1,
+            'name': s_name,
+            'stream_url': stream_url,
+            'headers': req_headers,
         })
 
+    if working_servers:
+      return jsonify({
+          'status': 'success',
+          'data': {
+              'servers': working_servers,
+              # للتوافقية السريعة مع أي مشغل قديم:
+              'stream_url': working_servers[0]['stream_url'],
+              'headers': working_servers[0]['headers'],
+          },
+      })
+
     return jsonify(
-        {'status': 'error', 'message': 'Failed to extract stream link'}
+        {'status': 'error', 'message': 'No working stream servers found'}
     ), 404
   except Exception as e:
     return jsonify({'status': 'error', 'message': str(e)}), 500
