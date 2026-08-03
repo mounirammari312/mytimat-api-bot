@@ -56,7 +56,7 @@ def unpack_js(packed_code):
 
 
 def extract_stream_from_embed(embed_url):
-  """استخراج رابط البث من مختلف خوادم المشاهدة"""
+  """استخراج رابط البث من مختلف خوادم المشاهدة (بما فيها Vidspeed و Rty1)"""
   try:
     req_headers = {'User-Agent': HEADERS['User-Agent'], 'Referer': embed_url}
     res = requests.get(
@@ -69,7 +69,7 @@ def extract_stream_from_embed(embed_url):
     if 'File is no longer available' in html or res.status_code != 200:
       return None, None
 
-    # 1. دعم سيرفرات VK
+    # 1. دعم سيرفرات VK (vk.com)
     if 'vk.com' in embed_url:
       vk_matches = re.findall(
           r'https?:\\/\\/[^\s"\'<>\\]+?\.(?:mp4|m3u8)[^\s"\'<>\\]*', html
@@ -82,7 +82,7 @@ def extract_stream_from_embed(embed_url):
         clean_url = vk_matches[-1].replace('\\/', '/')
         return clean_url, {'User-Agent': HEADERS['User-Agent']}
 
-    # 2. البحث الصريح عن m3u8 أو mp4
+    # 2. البحث الصريح عن روابط m3u8 أو mp4 (يدعم Vidspeed / Rty1 / Mp4 / Ok)
     m3u8_matches = re.findall(
         r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', html
     )
@@ -99,6 +99,14 @@ def extract_stream_from_embed(embed_url):
         )
         if fm:
           m3u8_matches = [fm.group(1)]
+
+    # 4. البحث داخل مصفوفات JWPlayer (خاص ببعض خوادم الأفلام الأجنبية)
+    if not m3u8_matches:
+      sources_match = re.findall(
+          r'sources\s*:\s*\[\s*\{\s*file\s*:\s*["\']([^"\']+)["\']', html
+      )
+      if sources_match:
+        m3u8_matches = sources_match
 
     if m3u8_matches:
       stream_url = list(set(m3u8_matches))[0]
@@ -280,7 +288,7 @@ def get_details():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 4️⃣ اقتناص رابط البث المباشر (Multi-Server Stream Fetcher)
+# 4️⃣ اقتناص رابط البث المباشر المطور (الأولية لـ Vidspeed / Rty1 / VK / Mp4)
 @app.route('/api/stream', methods=['GET'])
 def get_stream():
   vid = request.args.get('vid', '')
@@ -294,10 +302,21 @@ def get_stream():
 
     servers = soup.select('li[id*="server"], li[data-embed]')
 
-    for srv in servers:
+    # ترتيب السيرفرات بذكاء: وضع السيرفرات القوية والشغالة أولاً وتجاوز المعطوبة
+    def server_priority(s):
+      sid = s.get('id', '').lower()
+      if 'vidspeed' in sid or 'rty' in sid or 'vk' in sid or 'mp4' in sid:
+        return 0  # أولوية قصوى
+      if 'filemoon' in sid or 'vidmoly' in sid or 'vidoba' in sid:
+        return 2  # استبعاد أو أولوية منخفضة
+      return 1
+
+    sorted_servers = sorted(servers, key=server_priority)
+
+    for srv in sorted_servers:
       srv_id = srv.get('id', '').lower()
-      if 'vidoba' in srv_id:
-        continue  # تجاوز Vidoba المقيد بـ IP
+      if 'vidoba' in srv_id or 'filemoon' in srv_id or 'vidmoly' in srv_id:
+        continue  # تجاوز السيرفرات المعطوبة أو المقيدة بـ IP
 
       embed_attr = srv.get('data-embed', '')
       match = re.search(r'src=["\']([^"\']+)["\']', embed_attr)
