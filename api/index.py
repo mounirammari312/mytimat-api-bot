@@ -1,3 +1,4 @@
+import html as html_module
 import re
 import requests
 from bs4 import BeautifulSoup
@@ -16,7 +17,7 @@ HEADERS = {
 
 
 def normalize_text(text):
-  """توحيد النصوص العربية لمنع تكرار الهمزات والأحرف"""
+  """توحيد النصوص العربية لمنع التكرار"""
   if not text:
     return ''
   text = re.sub(r'[أإآ]', 'ا', text)
@@ -32,7 +33,7 @@ def clean_series_title(raw_title):
       r'(?:الحلقة|حلقة)\s*\d+.*', '', raw_title, flags=re.IGNORECASE
   )
   title = re.sub(
-      r'(?:الموسم|موسم)\s*\d+.*', '', title, flags=re.IGNORECASE
+      r'(?:الموسم|موسم)\_s*\d+.*', '', title, flags=re.IGNORECASE
   )
   title = re.sub(
       r'(?:مترجم|مترجمة|مدبلج|مدبلجة|ماي سيما|HD|اون لاين|كامل).*',
@@ -45,7 +46,7 @@ def clean_series_title(raw_title):
 
 
 def unpack_js(packed_code):
-  """دالة فك تشفير كود Packed JS المخبأ (تفك تشفير Vidspeed و Rty1)"""
+  """دالة فك تشفير كود Packed JS المخبأ (فك تشفير Vidspeed و Rty1)"""
   try:
     pattern = (
         r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)"
@@ -85,8 +86,11 @@ def unpack_js(packed_code):
 
 
 def extract_stream_from_embed(embed_url):
-  """استخراج رابط البث من مختلف خوادم المشاهدة المشفرة والعادية"""
+  """استخراج رابط البث المباشر من مختلف خوادم المشاهدة"""
   try:
+    if embed_url.startswith('//'):
+      embed_url = 'https:' + embed_url
+
     req_headers = {'User-Agent': HEADERS['User-Agent'], 'Referer': embed_url}
     res = requests.get(
         embed_url,
@@ -98,47 +102,55 @@ def extract_stream_from_embed(embed_url):
     if 'File is no longer available' in html or res.status_code != 200:
       return None, None
 
-    # 1️⃣ دعم سيرفرات VK (vk.com)
+    # معالجة الشرطات المائلة المنسقة
+    html_clean = html.replace('\\/', '/')
+
+    # 1️⃣ دعم سيرفرات VK
     if 'vk.com' in embed_url:
       vk_matches = re.findall(
-          r'https?:\\/\\/[^\s"\'<>\\]+?\.(?:mp4|m3u8)[^\s"\'<>\\]*', html
+          r'(?:https?:)?//[^\s"\'<>\\]+?\.(?:mp4|m3u8)[^\s"\'<>\\]*',
+          html_clean,
       )
-      if not vk_matches:
-        vk_matches = re.findall(
-            r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', html
-        )
       if vk_matches:
-        clean_url = vk_matches[-1].replace('\\/', '/')
+        clean_url = vk_matches[-1]
+        if clean_url.startswith('//'):
+          clean_url = 'https:' + clean_url
         return clean_url, {'User-Agent': HEADERS['User-Agent']}
 
-    # 2️⃣ البحث الصريح عن روابط m3u8 أو mp4 (يدعم Vidspeed / Rty1 / Mp4)
+    # 2️⃣ البحث عن روابط m3u8 أو mp4
     m3u8_matches = re.findall(
-        r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', html
+        r'(?:https?:)?//[^\s"\'<>\\]+?\.(?:m3u8|mp4)[^\s"\'<>\\]*', html_clean
     )
 
-    # 3️⃣ فك تشفير Packed JS في حال عدم وجود رابط صريح
+    # 3️⃣ فك تشفير Packed JS
     if not m3u8_matches and 'eval(function(p,a,c,k,e' in html:
       unpacked = unpack_js(html)
-      m3u8_matches = re.findall(
-          r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', unpacked
-      )
-      if not m3u8_matches:
-        fm = re.search(
-            r'file\s*:\s*["\']([^"\']+\.(?:m3u8|mp4)[^"\']*)["\']', unpacked
+      if unpacked:
+        unpacked_clean = unpacked.replace('\\/', '/')
+        m3u8_matches = re.findall(
+            r'(?:https?:)?//[^\s"\'<>\\]+?\.(?:m3u8|mp4)[^\s"\'<>\\]*',
+            unpacked_clean,
         )
-        if fm:
-          m3u8_matches = [fm.group(1)]
+        if not m3u8_matches:
+          fm = re.search(
+              r'file\s*:\s*["\']([^"\']+\.(?:m3u8|mp4)[^"\']*)["\']',
+              unpacked_clean,
+          )
+          if fm:
+            m3u8_matches = [fm.group(1)]
 
-    # 4️⃣ البحث داخل مصفوفات JWPlayer
+    # 4️⃣ البحث داخل مشغلات JWPlayer
     if not m3u8_matches:
       sources_match = re.findall(
-          r'sources\s*:\s*\[\s*\{\s*file\s*:\s*["\']([^"\']+)["\']', html
+          r'sources\s*:\s*\[\s*\{\s*file\s*:\s*["\']([^"\']+)["\']', html_clean
       )
       if sources_match:
         m3u8_matches = sources_match
 
     if m3u8_matches:
       stream_url = list(set(m3u8_matches))[0]
+      if stream_url.startswith('//'):
+        stream_url = 'https:' + stream_url
       return stream_url, req_headers
 
   except Exception:
@@ -148,7 +160,7 @@ def extract_stream_from_embed(embed_url):
 
 
 def fetch_category_items_fast(base_url, content_type='any', limit=15, page=1):
-  """دالة سريعة ومفلترة لجلب العناصر بدون تكرار الحلقات وبدون إجهاد الخادم"""
+  """جلب العناصر السريع بدون تكرار الحلقات"""
   items = []
   seen_base_titles = set()
   page_url = base_url if page == 1 else f'{base_url}&page={page}'
@@ -170,7 +182,6 @@ def fetch_category_items_fast(base_url, content_type='any', limit=15, page=1):
 
       norm_raw = normalize_text(raw_title)
 
-      # الفلترة الصارمة بين الأفلام والمسلسلات
       if content_type == 'series' and 'فيلم' in norm_raw:
         continue
       if content_type == 'movies' and (
@@ -184,7 +195,6 @@ def fetch_category_items_fast(base_url, content_type='any', limit=15, page=1):
       if norm_base in seen_base_titles:
         continue
 
-      # استخراج رابط البوستر
       poster = ''
       if post.name != 'a':
         img_ser = post.find('div', class_='imgSer')
@@ -211,7 +221,7 @@ def fetch_category_items_fast(base_url, content_type='any', limit=15, page=1):
   return items
 
 
-# 1️⃣ الواجهة الرئيسية بنمط Netflix / Shahid (/api/home)
+# 1️⃣ الواجهة الرئيسية (/api/home)
 @app.route('/api/home', methods=['GET'])
 def get_home():
   try:
@@ -261,7 +271,7 @@ def get_home():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 2️⃣ الكاتالوج والتصفح بالأقسام بدعم التصفح اللانهائي (/api/catalog)
+# 2️⃣ الكاتالوج والتصفح بالأقسام (/api/catalog)
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
   page = int(request.args.get('page', '1'))
@@ -286,7 +296,7 @@ def get_catalog():
   )
 
 
-# 3️⃣ نقطة نهاية لجلب جميع أقسام الموقع ديناميكياً (/api/categories)
+# 3️⃣ نقطة نهاية الأقسام (/api/categories)
 @app.route('/api/categories', methods=['GET'])
 def get_all_categories():
   try:
@@ -349,7 +359,7 @@ def search():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 5️⃣ التفاصيل والحلقات المنقاة والمرتبة تصاعدياً (/api/details)
+# 5️⃣ التفاصيل والحلقات المنقاة (/api/details)
 @app.route('/api/details', methods=['GET'])
 def get_details():
   vid = request.args.get('vid', '')
@@ -411,7 +421,6 @@ def get_details():
         seen_vids.add(ep_vid)
         episodes.append({'vid': ep_vid, 'title': ep_title})
 
-    # استخراج رقم الحلقة وترتيب القائمة تصاعدياً (1 -> الأخيرة)
     def get_episode_number(item):
       match = re.search(r'(?:الحلقة|حلقة)\s*(\d+)', item['title'])
       return int(match.group(1)) if match else 9999
@@ -432,7 +441,7 @@ def get_details():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 6️⃣ اقتناص رابط البث المباشر الكامل والمضمون لكل الفيديوات (/api/stream)
+# 6️⃣ اقتناص رابط البث المباشر الفائق والدقيق (/api/stream)
 @app.route('/api/stream', methods=['GET'])
 def get_stream():
   vid = request.args.get('vid', '')
@@ -444,27 +453,69 @@ def get_stream():
     res = requests.get(play_url, headers=HEADERS, timeout=10)
     soup = BeautifulSoup(res.text, 'html.parser')
 
-    servers = soup.select('li[id*="server"], li[data-embed]')
+    servers = soup.select(
+        'li[id*="server"], li[data-embed], .servers-list li, ul.servers li'
+    )
 
     def server_priority(s):
-      sid = s.get('id', '').lower()
-      if 'vidspeed' in sid or 'rty' in sid or 'vk' in sid or 'mp4' in sid:
+      sid = (s.get('id', '') or '').lower()
+      s_text = (s.get_text() or '').lower()
+      if (
+          'vidspeed' in sid
+          or 'rty' in sid
+          or 'vk' in sid
+          or 'mp4' in sid
+          or 'vidspeed' in s_text
+      ):
         return 0
       return 1
 
     sorted_servers = sorted(servers, key=server_priority)
 
     for srv in sorted_servers:
-      srv_id = srv.get('id', '').lower()
-      if 'vidoba' in srv_id or 'filemoon' in srv_id or 'vidmoly' in srv_id:
+      # تجميع النص الخام للسيرفر وفك رموز الـ HTML
+      raw_embed = ''
+      for attr in [
+          'data-embed',
+          'data-url',
+          'data-src',
+          'data-link',
+          'href',
+          'src',
+      ]:
+        val = srv.get(attr, '')
+        if val:
+          raw_embed = val
+          break
+
+      if not raw_embed:
+        iframe = srv.find('iframe')
+        if iframe and iframe.get('src'):
+          raw_embed = iframe.get('src')
+        else:
+          raw_embed = str(srv)
+
+      raw_embed = html_module.unescape(raw_embed)
+
+      # استخراج رابط المشغّل الحقيقي (Embed URL)
+      embed_url = ''
+      match_src = re.search(
+          r'(?:src|href)=["\']([^"\']+)["\']', raw_embed, re.IGNORECASE
+      )
+      if match_src:
+        embed_url = match_src.group(1)
+      else:
+        match_url = re.search(r'(?:https?:)?//[^\s"\'<>]+', raw_embed)
+        if match_url:
+          embed_url = match_url.group(0)
+
+      if not embed_url:
         continue
 
-      embed_attr = srv.get('data-embed', '')
-      match = re.search(r'src=["\']([^"\']+)["\']', embed_attr)
-      embed_url = match.group(1) if match else ''
+      if embed_url.startswith('//'):
+        embed_url = 'https:' + embed_url
 
-      if not embed_url or not embed_url.startswith('http'):
-        continue
+      embed_url = embed_url.rstrip('"\'>;')
 
       stream_url, req_headers = extract_stream_from_embed(embed_url)
 
