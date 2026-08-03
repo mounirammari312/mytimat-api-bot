@@ -16,7 +16,7 @@ HEADERS = {
 
 
 def normalize_text(text):
-  """توحيد النصوص العربية لمنع تكرار الهمزات والأحرف"""
+  """توحيد النصوص العربية لمنع التكرار"""
   text = re.sub(r'[أإآ]', 'ا', text)
   text = re.sub(r'ة', 'ه', text)
   return text.strip().lower()
@@ -40,163 +40,155 @@ def clean_series_title(raw_title):
   return title.strip()
 
 
-def discover_category_urls():
-  """استخراج روابط الأقسام الحقيقية مباشرة من قائمة الموقع الرئيسية"""
-  category_urls = {}
-  try:
-    res = requests.get(BASE_URL, headers=HEADERS, timeout=8)
-    soup = BeautifulSoup(res.text, 'html.parser')
-
-    KEYWORDS = {
-        'foreign_movies': ('افلام اجنبي', 'movies', '🎬 أفلام أجنبية'),
-        'foreign_series': ('مسلسلات اجنبي', 'series', '📺 مسلسلات أجنبية'),
-        'turkish_series': ('مسلسلات تركي', 'series', '🇹🇷 مسلسلات تركية'),
-        'arabic_movies': ('افلام عربي', 'movies', '🔥 أفلام عربية'),
-        'arabic_series': ('مسلسلات عربي', 'series', '🌙 مسلسلات عربية'),
-    }
-
-    for a in soup.find_all('a', href=True):
-      text = normalize_text(a.get_text(strip=True))
-      href = a['href']
-
-      for cat_key, (kw, ctype, display_name) in KEYWORDS.items():
-        if cat_key not in category_urls and kw in text:
-          full_url = (
-              href
-              if href.startswith('http')
-              else f"{BASE_URL}/{href.lstrip('/')}"
-          )
-          category_urls[cat_key] = {
-              'title': display_name,
-              'url': full_url,
-              'type': ctype,
-          }
-  except Exception:
-    pass
-
-  return category_urls
-
-
-def fetch_perfect_category_items(base_url, content_type, limit=10):
-  """جلب عناصر نظيفة وفريدة مع البوسترات عبر التصفح المتتابع"""
+def fetch_category_items_fast(base_url, content_type='any', limit=15, page=1):
+  """دالة سريعة جداً لجلب العناصر من صفحة واحدة لحماية Vercel من الـ Timeout"""
   items = []
   seen_base_titles = set()
+  page_url = base_url if page == 1 else f'{base_url}&page={page}'
 
-  for page in range(1, 4):
-    if len(items) >= limit:
-      break
-    page_url = base_url if page == 1 else f'{base_url}&page={page}'
+  try:
+    res = requests.get(page_url, headers=HEADERS, timeout=5)
+    soup = BeautifulSoup(res.text, 'html.parser')
 
-    try:
-      res = requests.get(page_url, headers=HEADERS, timeout=8)
-      soup = BeautifulSoup(res.text, 'html.parser')
+    for post in soup.select('.block-post, li:has(div.imgSer), a[href*="vid="]'):
+      a_tag = post if post.name == 'a' else post.find('a', href=True)
+      if not a_tag or 'vid=' not in a_tag.get('href', ''):
+        continue
 
-      for post in soup.select('.block-post, li:has(div.imgSer), a[href*="vid="]'):
-        a_tag = post if post.name == 'a' else post.find('a', href=True)
-        if not a_tag or 'vid=' not in a_tag.get('href', ''):
-          continue
+      vid = a_tag['href'].split('vid=')[-1]
+      raw_title = a_tag.get('title', '').strip() or a_tag.get_text(strip=True)
 
-        vid = a_tag['href'].split('vid=')[-1]
-        raw_title = a_tag.get('title', '').strip() or a_tag.get_text(strip=True)
+      if not raw_title or len(raw_title) < 4 or 'صفحة' in raw_title:
+        continue
 
-        if not raw_title or len(raw_title) < 4 or 'صفحة' in raw_title:
-          continue
+      norm_raw = normalize_text(raw_title)
 
-        norm_raw = normalize_text(raw_title)
+      # فلترة صريحة حسب نوع المحتوى
+      if content_type == 'series' and 'فيلم' in norm_raw:
+        continue
+      if content_type == 'movies' and (
+          'مسلسل' in norm_raw or 'حلقة' in norm_raw
+      ):
+        continue
 
-        # 1. الفلترة الصارمة لنوع المحتوى
-        if content_type == 'series' and 'فيلم' in norm_raw:
-          continue
-        if content_type == 'movies' and (
-            'مسلسل' in norm_raw or 'حلقة' in norm_raw
-        ):
-          continue
+      base_title = clean_series_title(raw_title)
+      norm_base = normalize_text(base_title)
 
-        # 2. تنقية العنوان والتجميع
-        base_title = clean_series_title(raw_title)
-        norm_base = normalize_text(base_title)
+      if norm_base in seen_base_titles:
+        continue
 
-        if norm_base in seen_base_titles:
-          continue
+      # استخراج البوستر
+      poster = ''
+      if post.name != 'a':
+        img_ser = post.find('div', class_='imgSer')
+        if img_ser and img_ser.get('style'):
+          m = re.search(r"url\(['\"]?(.*?)['\"]?\)", img_ser['style'])
+          if m:
+            poster = m.group(1)
 
-        # 3. استخراج البوستر
-        poster = ''
-        if post.name != 'a':
-          img_ser = post.find('div', class_='imgSer')
-          if img_ser and img_ser.get('style'):
-            m = re.search(r"url\(['\"]?(.*?)['\"]?\)", img_ser['style'])
-            if m:
-              poster = m.group(1)
+      if not poster and post.find('img'):
+        img = post.find('img')
+        poster = img.get('src') or img.get('data-src') or ''
 
-        if not poster and post.find('img'):
-          img = post.find('img')
-          poster = img.get('src') or img.get('data-src') or ''
+      if poster and not poster.startswith('http'):
+        poster = f"{BASE_URL}/{poster.lstrip('/')}"
 
-        if poster and not poster.startswith('http'):
-          poster = f"{BASE_URL}/{poster.lstrip('/')}"
+      seen_base_titles.add(norm_base)
+      items.append({'vid': vid, 'title': base_title, 'poster': poster})
 
-        seen_base_titles.add(norm_base)
-        items.append({'vid': vid, 'title': base_title, 'poster': poster})
-
-        if len(items) >= limit:
-          break
-    except Exception:
-      pass
+      if len(items) >= limit:
+        break
+  except Exception:
+    pass
 
   return items
 
 
-def unpack_js(packed_code):
-  """دالة فك تشفير كود Packed JS المخبأ"""
-  try:
-    pattern = (
-        r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)"
-    )
-    match = re.search(pattern, packed_code, re.DOTALL)
-    if not match:
-      return ''
-
-    payload, base_str, count_str, keywords_str = match.groups()
-    base, count, keywords = (
-        int(base_str),
-        int(count_str),
-        keywords_str.split('|'),
-    )
-
-    def encode_base(num, b):
-      chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
-      return (
-          chars[num]
-          if num < b
-          else encode_base(num // b, b) + chars[num % b]
-      )
-
-    syms = {
-        encode_base(i, base): (
-            keywords[i]
-            if i < len(keywords) and keywords[i]
-            else encode_base(i, base)
-        )
-        for i in range(count)
-    }
-    return re.sub(
-        r'\b\w+\b', lambda m: syms.get(m.group(0), m.group(0)), payload
-    )
-  except Exception:
-    return ''
-
-
-# 1️⃣ الواجهة الرئيسية الشاملة لجميع أقسام الموقع (/api/home)
+# 1️⃣ الصفحة الرئيسية السريعة والمضمونة (/api/home)
 @app.route('/api/home', methods=['GET'])
 def get_home():
   try:
-    res = requests.get(BASE_URL, headers=HEADERS, timeout=10)
-    soup = BeautifulSoup(res.text, 'html.parser')
+    MAIN_CATEGORIES = [
+        (
+            'foreign_movies',
+            '🎬 أفلام أجنبية',
+            f'{BASE_URL}/category.php?cat=aflam-ajnbe111',
+            'movies',
+        ),
+        (
+            'foreign_series',
+            '📺 مسلسلات أجنبية',
+            f'{BASE_URL}/category.php?cat=mslslat-ajnbe11',
+            'series',
+        ),
+        (
+            'turkish_series',
+            '🇹🇷 مسلسلات تركية',
+            f'{BASE_URL}/category.php?cat=mslslat-trke1',
+            'series',
+        ),
+        (
+            'arabic_movies',
+            '🔥 أفلام عربية',
+            f'{BASE_URL}/category.php?cat=aflam-a',
+            'movies',
+        ),
+        (
+            'arabic_series',
+            '🌙 مسلسلات عربية',
+            f'{BASE_URL}/category.php?cat=mslslat-arbe122',
+            'series',
+        ),
+    ]
 
     sections = []
+    for key, title, url, ctype in MAIN_CATEGORIES:
+      items = fetch_category_items_fast(
+          url, content_type=ctype, limit=8, page=1
+      )
+      if items:
+        sections.append({'key': key, 'title': title, 'items': items})
+
+    return jsonify({'status': 'success', 'data': sections})
+  except Exception as e:
+    return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# 2️⃣ الكاتالوج والتصفح بالأقسام السريع (/api/catalog)
+@app.route('/api/catalog', methods=['GET'])
+def get_catalog():
+  page = int(request.args.get('page', '1'))
+  cat_slug = request.args.get('cat', 'movies').lower()
+  limit = int(request.args.get('limit', '20'))
+
+  if cat_slug == 'series':
+    url = f'{BASE_URL}/all-series.php'
+    ctype = 'series'
+  elif cat_slug == 'movies':
+    url = f'{BASE_URL}/index.php'
+    ctype = 'movies'
+  else:
+    url = f'{BASE_URL}/category.php?cat={cat_slug}'
+    ctype = 'series' if 'mslsl' in cat_slug or 'series' in cat_slug else 'movies'
+
+  items = fetch_category_items_fast(
+      url, content_type=ctype, limit=limit, page=page
+  )
+  return jsonify(
+      {'status': 'success', 'page': page, 'cat': cat_slug, 'data': items}
+  )
+
+
+# 3️⃣ نقطة نهاية جميع الأقسام الخفيفة (/api/categories)
+@app.route('/api/categories', methods=['GET'])
+def get_all_categories():
+  try:
+    res = requests.get(BASE_URL, headers=HEADERS, timeout=5)
+    soup = BeautifulSoup(res.text, 'html.parser')
+
+    categories = []
     seen_urls = set()
 
-    # قراءة كل قسم موجود في قائمة الموقع العلوي وتحويله لصف في الشاشة الرئيسية
     for a in soup.find_all('a', href=True):
       href = a['href']
       title = a.get_text(strip=True)
@@ -215,71 +207,26 @@ def get_home():
             and 'الرئيسية' not in title
         ):
           seen_urls.add(full_url)
-
-          c_type = (
+          cat_slug = href.split('cat=')[-1] if 'cat=' in href else 'series'
+          ctype = (
               'series'
-              if ('مسلسل' in title or 'series' in href.lower())
+              if ('مسلسل' in title or 'mslsl' in cat_slug)
               else 'movies'
           )
-          cat_slug = href.split('cat=')[-1] if 'cat=' in href else 'all'
 
-          # جلب 8 أعمال فريدة وممتازة لهذا القسم
-          items = fetch_perfect_category_items(
-              full_url, content_type=c_type, limit=8
-          )
+          categories.append({
+              'id': cat_slug,
+              'title': title,
+              'url': full_url,
+              'type': ctype,
+          })
 
-          if items:
-            sections.append({
-                'key': cat_slug,
-                'title': title,
-                'items': items,
-            })
-
-    return jsonify({'status': 'success', 'data': sections})
+    return jsonify({'status': 'success', 'data': categories})
   except Exception as e:
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-
-
-
-
-
-
-
-
-# 2️⃣ الكاتالوج الشامل المطور بدعم التصفح اللانهائي (Pagination)
-@app.route('/api/catalog', methods=['GET'])
-def get_catalog():
-  page = int(request.args.get('page', '1'))
-  cat_key = request.args.get('cat', 'movies').lower()
-  limit = int(request.args.get('limit', '30'))  # رفع الحد الإفتراضي إلى 30
-
-  discovered_cats = discover_category_urls()
-
-  if cat_key in discovered_cats:
-    cat_data = discovered_cats[cat_key]
-    items = fetch_perfect_category_items(
-        cat_data['url'], content_type=cat_data['type'], limit=limit, start_page=page
-    )
-  else:
-    url = (
-        f'{BASE_URL}/'
-        if page == 1
-        else f'{BASE_URL}/index.php?page={page}'
-    )
-    items = fetch_perfect_category_items(url, content_type='any', limit=limit, start_page=page)
-
-  return jsonify({'status': 'success', 'page': page, 'cat': cat_key, 'data': items})
-
-
-
-
-
-
-
-
-# 3️⃣ البحث المباشر (Search)
+# 4️⃣ البحث المباشر (Search)
 @app.route('/api/search', methods=['GET'])
 def search():
   query = request.args.get('q', '')
@@ -287,13 +234,15 @@ def search():
     return jsonify({'status': 'error', 'message': 'Query missing'}), 400
   try:
     url = f'{BASE_URL}/search.php?keywords={query}'
-    items = fetch_perfect_category_items(url, content_type='any', limit=30)
+    items = fetch_category_items_fast(
+        url, content_type='any', limit=20, page=1
+    )
     return jsonify({'status': 'success', 'data': items})
   except Exception as e:
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 4️⃣ التفاصيل والحلقات المنقاة (Details & Episodes)
+# 5️⃣ التفاصيل والحلقات (Details & Episodes)
 @app.route('/api/details', methods=['GET'])
 def get_details():
   vid = request.args.get('vid', '')
@@ -301,7 +250,7 @@ def get_details():
     return jsonify({'status': 'error', 'message': 'vid missing'}), 400
   try:
     res = requests.get(
-        f'{BASE_URL}/play.php?vid={vid}', headers=HEADERS, timeout=10
+        f'{BASE_URL}/play.php?vid={vid}', headers=HEADERS, timeout=8
     )
     soup = BeautifulSoup(res.text, 'html.parser')
 
@@ -375,7 +324,7 @@ def get_details():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 5️⃣ اقتناص رابط البث المباشر (Multi-Server Stream Fetcher)
+# 6️⃣ اقتناص رابط البث المباشر (Stream Fetcher)
 @app.route('/api/stream', methods=['GET'])
 def get_stream():
   vid = request.args.get('vid', '')
@@ -384,7 +333,7 @@ def get_stream():
 
   play_url = f'{BASE_URL}/play.php?vid={vid}'
   try:
-    res = requests.get(play_url, headers=HEADERS, timeout=10)
+    res = requests.get(play_url, headers=HEADERS, timeout=8)
     soup = BeautifulSoup(res.text, 'html.parser')
 
     servers = soup.select('li[id*="server"], li[data-embed]')
@@ -420,7 +369,7 @@ def get_stream():
                 'User-Agent': HEADERS['User-Agent'],
                 'Referer': BASE_URL,
             },
-            timeout=8,
+            timeout=5,
         )
         html = srv_res.text
 
@@ -449,19 +398,6 @@ def get_stream():
             r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', html
         )
 
-        if not m3u8_matches and 'eval(function(p,a,c,k,e' in html:
-          unpacked = unpack_js(html)
-          m3u8_matches = re.findall(
-              r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', unpacked
-          )
-          if not m3u8_matches:
-            fm = re.search(
-                r'file\s*:\s*["\']([^"\']+\.(?:m3u8|mp4)[^"\']*)["\']',
-                unpacked,
-            )
-            if fm:
-              m3u8_matches = [fm.group(1)]
-
         if m3u8_matches:
           stream_url = list(set(m3u8_matches))[0]
           return jsonify({
@@ -479,63 +415,6 @@ def get_stream():
     ), 404
   except Exception as e:
     return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
-# 6️⃣ نقطة نهاية لجلب جميع أقسام وتصنيفات الموقع ديناميكياً
-@app.route('/api/categories', methods=['GET'])
-def get_all_categories():
-  try:
-    res = requests.get(BASE_URL, headers=HEADERS, timeout=10)
-    soup = BeautifulSoup(res.text, 'html.parser')
-
-    categories = []
-    seen_urls = set()
-
-    # البحث في كافة روابط القوائم
-    for a in soup.find_all('a', href=True):
-      href = a['href']
-      title = a.get_text(strip=True)
-
-      if 'category.php' in href or 'all-series.php' in href:
-        full_url = (
-            href
-            if href.startswith('http')
-            else f"{BASE_URL}/{href.lstrip('/')}"
-        )
-
-        if (
-            full_url not in seen_urls
-            and title
-            and len(title) > 2
-            and 'الرئيسية' not in title
-        ):
-          seen_urls.add(full_url)
-
-          # تحديد نوع المحتوى تلقائياً (فيلم أو مسلسل)
-          c_type = (
-              'series'
-              if ('مسلسل' in title or 'series' in href.lower())
-              else 'movies'
-          )
-
-          # استخراج معرّف التصنيف cat slug
-          cat_slug = href.split('cat=')[-1] if 'cat=' in href else 'all'
-
-          categories.append({
-              'id': cat_slug,
-              'title': title,
-              'url': full_url,
-              'type': c_type,
-          })
-
-    return jsonify({'status': 'success', 'data': categories})
-  except Exception as e:
-    return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
-
-
-
 
 
 if __name__ == '__main__':
