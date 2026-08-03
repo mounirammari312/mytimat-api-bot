@@ -15,6 +15,42 @@ HEADERS = {
 }
 
 
+def unpack_js(packed_code):
+  """دالة فك تشفير كود Dean Edwards Packed JS المخبأ"""
+  try:
+    pattern = (
+        r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)"
+    )
+    match = re.search(pattern, packed_code, re.DOTALL)
+    if not match:
+      return ''
+
+    payload, base_str, count_str, keywords_str = match.groups()
+    base = int(base_str)
+    count = int(count_str)
+    keywords = keywords_str.split('|')
+
+    def encode_base(num, b):
+      chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+      if num < b:
+        return chars[num]
+      return encode_base(num // b, b) + chars[num % b]
+
+    syms = {}
+    for i in range(count):
+      key = encode_base(i, base)
+      val = keywords[i] if i < len(keywords) and keywords[i] else key
+      syms[key] = val
+
+    def replace_word(m):
+      word = m.group(0)
+      return syms.get(word, word)
+
+    return re.sub(r'\b\w+\b', replace_word, payload)
+  except Exception:
+    return ''
+
+
 # 1️⃣ القائمة الرئيسية (Catalog)
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
@@ -181,7 +217,7 @@ def get_details():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 4️⃣ اقتناص رابط البث المباشر المباشر (Live Stream Fetcher)
+# 4️⃣ اقتناص رابط البث المباشر الذكي (Live Unpacked Stream Fetcher)
 @app.route('/api/stream', methods=['GET'])
 def get_stream():
   vid = request.args.get('vid', '')
@@ -193,35 +229,57 @@ def get_stream():
     res = requests.get(play_url, headers=HEADERS, timeout=10)
     soup = BeautifulSoup(res.text, 'html.parser')
 
-    srv_li = soup.select_one('li#server_Anafast') or soup.select_one(
-        'li[id^="server_"]'
-    )
-    embed_url = ''
-    if srv_li and srv_li.get('data-embed'):
-      match = re.search(r'src=["\']([^"\']+)["\']', srv_li['data-embed'])
-      if match:
-        embed_url = match.group(1)
+    servers = soup.select('li[id*="server"], li[data-embed]')
 
-    if embed_url:
-      srv_res = requests.get(
-          embed_url, headers={'Referer': BASE_URL}, timeout=10
-      )
-      m3u8_matches = re.findall(
-          r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', srv_res.text
-      )
+    for srv in servers:
+      embed_attr = srv.get('data-embed', '')
+      match = re.search(r'src=["\']([^"\']+)["\']', embed_attr)
+      embed_url = match.group(1) if match else ''
 
-      if m3u8_matches:
-        stream_url = list(set(m3u8_matches))[0]
-        return jsonify({
-            'status': 'success',
-            'data': {
-                'stream_url': stream_url,
-                'headers': {
-                    'Referer': embed_url,
-                    'User-Agent': HEADERS['User-Agent'],
-                },
-            },
-        })
+      if not embed_url or not embed_url.startswith('http'):
+        continue
+
+      try:
+        srv_res = requests.get(
+            embed_url, headers={'Referer': f'{BASE_URL}/'}, timeout=8
+        )
+        html_text = srv_res.text
+
+        if 'File is no longer available' in html_text or srv_res.status_code != 200:
+          continue
+
+        # 1. البحث الصريح عن m3u8
+        m3u8_matches = re.findall(
+            r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', html_text
+        )
+
+        # 2. فك تشفير Packed JS عند الحاجة
+        if not m3u8_matches and 'eval(function(p,a,c,k,e' in html_text:
+          unpacked_text = unpack_js(html_text)
+          m3u8_matches = re.findall(
+              r'https?://[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*', unpacked_text
+          )
+          if not m3u8_matches:
+            file_match = re.search(
+                r'file\s*:\s*["\']([^"\']+\.m3u8[^"\']*)["\']', unpacked_text
+            )
+            if file_match:
+              m3u8_matches = [file_match.group(1)]
+
+        if m3u8_matches:
+          stream_url = list(set(m3u8_matches))[0]
+          return jsonify({
+              'status': 'success',
+              'data': {
+                  'stream_url': stream_url,
+                  'headers': {
+                      'Referer': embed_url,
+                      'User-Agent': HEADERS['User-Agent'],
+                  },
+              },
+          })
+      except Exception:
+        continue
 
     return jsonify(
         {'status': 'error', 'message': 'Failed to extract stream link'}
@@ -232,3 +290,4 @@ def get_stream():
 
 if __name__ == '__main__':
   app.run(debug=True)
+
