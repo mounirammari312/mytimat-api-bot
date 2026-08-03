@@ -228,7 +228,7 @@ def search():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 3️⃣ التفاصيل والحلقات (Details & Episodes)
+# 3️⃣ التفاصيل والحلقات (تصفية أزرار التنقل وترتيب الحلقات تصاعدياً)
 @app.route('/api/details', methods=['GET'])
 def get_details():
   vid = request.args.get('vid', '')
@@ -265,14 +265,41 @@ def get_details():
 
     episodes = []
     seen_vids = set()
+
+    # كلمات مستبعدة (تمنع جلب أزرار التنقل والروابط العشوائية)
+    IGNORE_KEYWORDS = [
+        'السابقة',
+        'التالية',
+        'الرئيسية',
+        'صفحة',
+        'فيس بوك',
+        'تليجرام',
+    ]
+
     for a in soup.find_all('a', href=True):
       href = a['href']
       ep_title = a.get_text(strip=True)
-      if 'watch.php?vid=' in href and ep_title:
+
+      if ('watch.php?vid=' in href or 'play.php?vid=' in href) and ep_title:
         ep_vid = href.split('vid=')[-1]
-        if ep_vid not in seen_vids:
-          seen_vids.add(ep_vid)
-          episodes.append({'vid': ep_vid, 'title': ep_title})
+
+        # استبعاد نفس الصفحة والأنواع المكررة
+        if ep_vid == vid or ep_vid in seen_vids:
+          continue
+
+        # استبعاد أزرار التنقل والكلمات العشوائية
+        if any(kw in ep_title for kw in IGNORE_KEYWORDS):
+          continue
+
+        seen_vids.add(ep_vid)
+        episodes.append({'vid': ep_vid, 'title': ep_title})
+
+    # استخراج رقم الحلقة وترتيب القائمة تصاعدياً (من الحلقة 1 إلى الأخيرة)
+    def get_episode_number(item):
+      match = re.search(r'(?:الحلقة|حلقة)\s*(\d+)', item['title'])
+      return int(match.group(1)) if match else 9999
+
+    episodes.sort(key=get_episode_number)
 
     return jsonify({
         'status': 'success',
@@ -286,6 +313,17 @@ def get_details():
     })
   except Exception as e:
     return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+
+
+      
+        
+
+
+
+
+
 
 
 # 4️⃣ اقتناص رابط البث المباشر المطور (الأولية لـ Vidspeed / Rty1 / VK / Mp4)
