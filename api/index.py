@@ -17,7 +17,7 @@ HEADERS = {
 
 
 def normalize_text(text):
-  """توحيد النصوص العربية لمنع التكرار"""
+  """توحيد النصوص العربية لمنع تكرار الأحرف والهمزات"""
   if not text:
     return ''
   text = re.sub(r'[أإآ]', 'ا', text)
@@ -53,6 +53,89 @@ def build_page_url(base_url, page):
     return f'{base_url}&page={page}'
   else:
     return f'{base_url}?page={page}'
+
+
+def unpack_js(packed_code):
+  """فك تشفير كود Packed JS المخبأ (Vidspeed / Rty1)"""
+  try:
+    pattern = (
+        r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)"
+    )
+    match = re.search(pattern, packed_code, re.DOTALL)
+    if not match:
+      return ''
+
+    payload, base_str, count_str, keywords_str = match.groups()
+    base, count, keywords = (
+        int(base_str),
+        int(count_str),
+        keywords_str.split('|'),
+    )
+
+    def encode_base(num, b):
+      chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+      return (
+          chars[num]
+          if num < b
+          else encode_base(num // b, b) + chars[num % b]
+      )
+
+    syms = {
+        encode_base(i, base): (
+            keywords[i]
+            if i < len(keywords) and keywords[i]
+            else encode_base(i, base)
+        )
+        for i in range(count)
+    }
+    return re.sub(
+        r'\b\w+\b', lambda m: syms.get(m.group(0), m.group(0)), payload
+    )
+  except Exception:
+    return ''
+
+
+def extract_stream_from_embed(embed_url):
+  """استخراج رابط البث المباشر المطور مع التوكنات وتجاوز الحظر"""
+  try:
+    if embed_url.startswith('//'):
+      embed_url = 'https:' + embed_url
+
+    req_headers = {'User-Agent': HEADERS['User-Agent'], 'Referer': embed_url}
+    res = requests.get(
+        embed_url,
+        headers={'User-Agent': HEADERS['User-Agent'], 'Referer': BASE_URL},
+        timeout=6,
+        allow_redirects=True,
+    )
+    if 'File is no longer available' in res.text or res.status_code != 200:
+      return None, None
+
+    html_clean = res.text.replace('\\/', '/')
+
+    stream_matches = re.findall(
+        r'(?:https?:)?//[^\s"\'<>\\]+?\.(?:m3u8|mp4)[^\s"\'<>\\]*', html_clean
+    )
+
+    if not stream_matches and 'eval(function' in res.text:
+      unpacked = unpack_js(res.text)
+      if unpacked:
+        unpacked_clean = unpacked.replace('\\/', '/')
+        stream_matches = re.findall(
+            r'(?:https?:)?//[^\s"\'<>\\]+?\.(?:m3u8|mp4)[^\s"\'<>\\]*',
+            unpacked_clean,
+        )
+
+    if stream_matches:
+      clean_url = stream_matches[0]
+      if clean_url.startswith('//'):
+        clean_url = 'https:' + clean_url
+      return clean_url.split('&amp;')[0], req_headers
+
+  except Exception:
+    pass
+
+  return None, None
 
 
 def fetch_category_items_fast(base_url, content_type='any', limit=20, page=1):
@@ -117,7 +200,7 @@ def fetch_category_items_fast(base_url, content_type='any', limit=20, page=1):
   return items
 
 
-# 1️⃣ الصفحة الرئيسية (/api/home)
+# 1️⃣ الواجهة الرئيسية (/api/home)
 @app.route('/api/home', methods=['GET'])
 def get_home():
   try:
@@ -192,7 +275,7 @@ def get_catalog():
   )
 
 
-# 3️⃣ جميع الأقسام (/api/categories)
+# 3️⃣ نقطة نهاية الأقسام (/api/categories)
 @app.route('/api/categories', methods=['GET'])
 def get_all_categories():
   try:
@@ -239,7 +322,7 @@ def get_all_categories():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 4️⃣ البحث (/api/search)
+# 4️⃣ البحث المباشر (Search)
 @app.route('/api/search', methods=['GET'])
 def search():
   query = request.args.get('q', '')
@@ -255,7 +338,7 @@ def search():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 5️⃣ التفاصيل والحلقات (/api/details)
+# 5️⃣ التفاصيل والحلقات المنقاة (/api/details)
 @app.route('/api/details', methods=['GET'])
 def get_details():
   vid = request.args.get('vid', '')
@@ -337,7 +420,7 @@ def get_details():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 6️⃣ البث المتعدد الشامل (/api/stream)
+# 6️⃣ البث المتعدد الشامل لكل الخوادم المتاحة (/api/stream)
 @app.route('/api/stream', methods=['GET'])
 def get_stream():
   vid = request.args.get('vid', '')
@@ -434,89 +517,6 @@ def get_stream():
     ), 404
   except Exception as e:
     return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
-def unpack_js(packed_code):
-  """فك تشفير كود Packed JS المخبأ"""
-  try:
-    pattern = (
-        r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)"
-    )
-    match = re.search(pattern, packed_code, re.DOTALL)
-    if not match:
-      return ''
-
-    payload, base_str, count_str, keywords_str = match.groups()
-    base, count, keywords = (
-        int(base_str),
-        int(count_str),
-        keywords_str.split('|'),
-    )
-
-    def encode_base(num, b):
-      chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
-      return (
-          chars[num]
-          if num < b
-          else encode_base(num // b, b) + chars[num % b]
-      )
-
-    syms = {
-        encode_base(i, base): (
-            keywords[i]
-            if i < len(keywords) and keywords[i]
-            else encode_base(i, base)
-        )
-        for i in range(count)
-    }
-    return re.sub(
-        r'\b\w+\b', lambda m: syms.get(m.group(0), m.group(0)), payload
-    )
-  except Exception:
-    return ''
-
-
-def extract_stream_from_embed(embed_url):
-  """استخراج رابط البث المباشر المطور مع التوكنات وتجاوز الحظر"""
-  try:
-    if embed_url.startswith('//'):
-      embed_url = 'https:' + embed_url
-
-    req_headers = {'User-Agent': HEADERS['User-Agent'], 'Referer': embed_url}
-    res = requests.get(
-        embed_url,
-        headers={'User-Agent': HEADERS['User-Agent'], 'Referer': BASE_URL},
-        timeout=6,
-        allow_redirects=True,
-    )
-    if 'File is no longer available' in res.text or res.status_code != 200:
-      return None, None
-
-    html_clean = res.text.replace('\\/', '/')
-
-    stream_matches = re.findall(
-        r'(?:https?:)?//[^\s"\'<>\\]+?\.(?:m3u8|mp4)[^\s"\'<>\\]*', html_clean
-    )
-
-    if not stream_matches and 'eval(function' in res.text:
-      unpacked = unpack_js(res.text)
-      if unpacked:
-        unpacked_clean = unpacked.replace('\\/', '/')
-        stream_matches = re.findall(
-            r'(?:https?:)?//[^\s"\'<>\\]+?\.(?:m3u8|mp4)[^\s"\'<>\\]*',
-            unpacked_clean,
-        )
-
-    if stream_matches:
-      clean_url = stream_matches[0]
-      if clean_url.startswith('//'):
-        clean_url = 'https:' + clean_url
-      return clean_url.split('&amp;')[0], req_headers
-
-  except Exception:
-    pass
-
-  return None, None
 
 
 if __name__ == '__main__':
