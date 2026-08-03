@@ -443,6 +443,63 @@ def get_stream():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+# 6️⃣ نقطة نهاية لجلب جميع أقسام وتصنيفات الموقع ديناميكياً
+@app.route('/api/categories', methods=['GET'])
+def get_all_categories():
+  try:
+    res = requests.get(BASE_URL, headers=HEADERS, timeout=10)
+    soup = BeautifulSoup(res.text, 'html.parser')
+
+    categories = []
+    seen_urls = set()
+
+    # البحث في كافة روابط القوائم
+    for a in soup.find_all('a', href=True):
+      href = a['href']
+      title = a.get_text(strip=True)
+
+      if 'category.php' in href or 'all-series.php' in href:
+        full_url = (
+            href
+            if href.startswith('http')
+            else f"{BASE_URL}/{href.lstrip('/')}"
+        )
+
+        if (
+            full_url not in seen_urls
+            and title
+            and len(title) > 2
+            and 'الرئيسية' not in title
+        ):
+          seen_urls.add(full_url)
+
+          # تحديد نوع المحتوى تلقائياً (فيلم أو مسلسل)
+          c_type = (
+              'series'
+              if ('مسلسل' in title or 'series' in href.lower())
+              else 'movies'
+          )
+
+          # استخراج معرّف التصنيف cat slug
+          cat_slug = href.split('cat=')[-1] if 'cat=' in href else 'all'
+
+          categories.append({
+              'id': cat_slug,
+              'title': title,
+              'url': full_url,
+              'type': c_type,
+          })
+
+    return jsonify({'status': 'success', 'data': categories})
+  except Exception as e:
+    return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+
+
+
+
+
 if __name__ == '__main__':
   app.run(debug=True)
 
