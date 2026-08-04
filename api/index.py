@@ -1,24 +1,26 @@
+import re
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
-import re
 import requests
 
 app = Flask(__name__)
 
-# --- الإعدادات الثابتة والـ Headers ---
-TMDB_API_KEY = '15d2fd480251d4e1f31be9d76d471906'
-TMDB_BASE_URL = 'https://api.themoviedb.org/3'
+# --- إعدادات TMDB API ---
+TMDB_API_KEY = "15d2fd480251d4e1f31be9d76d471906"
+TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
+# ترويسة خاصة بطلبات TMDB (مستقلة لمنع الرفض)
 TMDB_HEADERS = {
     'User-Agent': (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        ' (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     ),
     'Accept': 'application/json',
 }
 
 
-# --- 1. الاكتشاف الديناميكي للنطاق النشط ---
+# --- 1. الاكتشاف الديناميكي لنطاق أكوام النشط ---
 def get_active_akwam_domain():
   """يتصل برابط التوجيه المباشر لاستخراج النطاق الفعلي النشط حالياً"""
   try:
@@ -39,9 +41,11 @@ AKWAM_BASE_DOMAIN = get_active_akwam_domain()
 
 
 def get_akwam_headers(referer_url=None):
+  """توليد ترويسة مخصصة لموقع أكوام لضمان تجاوز الحظر"""
   return {
       'User-Agent': (
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          ' (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
       ),
       'Referer': referer_url or f'{AKWAM_BASE_DOMAIN}/',
   }
@@ -51,9 +55,9 @@ def format_poster(poster_path):
   return f'https://image.tmdb.org/t/p/w500{poster_path}' if poster_path else ''
 
 
-# --- 2. محرك تشريح بطاقات الكتالوج (Card Parser Utility) ---
+# --- 2. محرك تشريح وتصفية بطاقات الكتالوج ---
 def parse_akwam_cards(soup):
-  """تحليل بطاقات الكتالوج وإزالة التكرار ومعالجة التحميل الكسول للبوسترات"""
+  """تحليل بطاقات الكتالوج وإزالة التكرار ومعالجة البوسترات والجودات"""
   card_containers = soup.select(
       'div.widget-body div.col-lg-2, div.widget-body div.col-md-3,'
       ' div.entry-box'
@@ -74,7 +78,7 @@ def parse_akwam_cards(soup):
       continue
     seen_urls.add(href)
 
-    # 1. العنوان
+    # استخراج العنوان
     title_el = card.select_one(
         'h3.entry-title, .entry-title, h3, a.entry-title'
     )
@@ -86,7 +90,7 @@ def parse_akwam_cards(soup):
     elif img_el and img_el.get('alt'):
       title = img_el['alt']
 
-    # 2. البوستر (حل مشكلة Lazy Load)
+    # استخراج البوستر (حل مشكلة Lazy Load)
     poster_url = ''
     if img_el:
       poster_url = (
@@ -95,7 +99,7 @@ def parse_akwam_cards(soup):
       if poster_url and 'placeholder.png' in poster_url:
         poster_url = img_el.get('data-src') or poster_url
 
-    # 3. الوسوم والجودة
+    # استخراج الوسوم والجودة
     badge_els = card.select('span.badge, div.badge, span.quality')
     badges = [
         b.get_text(strip=True) for b in badge_els if b.get_text(strip=True)
@@ -114,7 +118,7 @@ def parse_akwam_cards(soup):
   return items
 
 
-# --- 3. نقاط الـ API (API Routes) ---
+# --- 3. نقاط الـ API الموحدة ---
 
 
 # 🟢 أ) نقطة فحص الصحة والوضع النشط
@@ -124,10 +128,11 @@ def index():
       'status': 'online',
       'engine': 'Akwam Direct Scraping Engine',
       'active_domain': AKWAM_BASE_DOMAIN,
-      'version': '1.0.0',
+      'version': '1.2.0',
   })
 
 
+# 🌐 ب) الواجهة الرئيسية الهجينة (TMDB + Fallback)
 @app.route('/api/home', methods=['GET'])
 def get_home():
   try:
@@ -168,9 +173,9 @@ def get_home():
           if t.get('poster_path')
       ]
     except Exception as tmdb_err:
-      print(f'⚠️ TMDB Fallback Triggered: {tmdb_err}')
+      print(f'⚠️ TMDB Fallback: {tmdb_err}')
 
-    # 2. خطة الاحتياط (Fallback): إذا كانت القائمة فارغة، جلب من كتالوج أكوام المباشر فوراً
+    # 2. خطة الاحتياط: إذا كانت القائمة فارغة يتم الجلب من الكتالوج المباشر
     if not trending_movies:
       res_akwam = requests.get(
           f'{AKWAM_BASE_DOMAIN}/movies',
@@ -195,11 +200,15 @@ def get_home():
             {
                 'key': 'trending_movies',
                 'title': '🔥 الأفلام الأكثر شهرة',
+                'has_see_all': True,
+                'see_all_params': {'type': 'movies', 'page': 1},
                 'items': trending_movies,
             },
             {
                 'key': 'trending_tv',
                 'title': '📺 المسلسلات الأكثر مشاهدة',
+                'has_see_all': True,
+                'see_all_params': {'type': 'series', 'page': 1},
                 'items': trending_tv,
             },
         ],
@@ -208,20 +217,18 @@ def get_home():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-
-# 📂 نقطة الكتالوج الشاملة مع دعم الفلاتر والترقيم الكامل
+# 📂 ج) نقطة الكتالوج الشاملة (لزر "عرض الكل" والتصفح اللانهائي والفلترة)
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
   cat_type = request.args.get('type', 'movies').lower()  # movies or series
   page = request.args.get('page', '1')
 
-  # استلام معاملات الفلترة الديناميكية
+  # معاملات الفلترة
   section = request.args.get('section', '')
   category = request.args.get('category', '')
   year = request.args.get('year', '')
   quality = request.args.get('quality', '')
 
-  # بناء رابط التصفية المباشر لـ أكوام
   query_params = [f'page={page}']
 
   if section:
@@ -244,7 +251,7 @@ def get_catalog():
 
     items = parse_akwam_cards(soup)
 
-    # استخراج أرقام الصفحات للترقيم
+    # استخرج أرقام الصفحات
     page_links = soup.select('ul.pagination a, a.page-link')
     pages = [
         p.get_text(strip=True)
@@ -274,16 +281,7 @@ def get_catalog():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-
-
-
-
-
-
-
-
-
-# 🔍 د) البحث الشامل
+# 🔍 د) البحث الشامل عبر TMDB
 @app.route('/api/search', methods=['GET'])
 def search():
   query = request.args.get('q', '')
@@ -360,7 +358,7 @@ def get_series_details():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 🎬 و) اقتناص روابط البث المباشرة (.mp4)
+# 🎬 و) نقطة اقتناص روابط البث المباشرة (.mp4)
 @app.route('/api/stream', methods=['GET'])
 def get_direct_stream():
   title = request.args.get('title', '')
