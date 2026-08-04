@@ -7,7 +7,7 @@ import requests
 app = Flask(__name__)
 
 # --- إعدادات TMDB API ---
-TMDB_API_KEY = "15d2fd480251d4e1f31be9d76d471906"
+TMDB_API_KEY = "65687d1e167bc35f38ee0c88c3a37b74"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
 TMDB_HEADERS = {
