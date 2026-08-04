@@ -209,20 +209,33 @@ def get_home():
 
 
 
-
-
-
-
-
-
-
-# 📂 ج) تصفح الكتالوجات مع الترقيم (Pagination)
+# 📂 نقطة الكتالوج الشاملة مع دعم الفلاتر والترقيم الكامل
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
   cat_type = request.args.get('type', 'movies').lower()  # movies or series
   page = request.args.get('page', '1')
 
-  catalog_url = f'{AKWAM_BASE_DOMAIN}/{cat_type}?page={page}'
+  # استلام معاملات الفلترة الديناميكية
+  section = request.args.get('section', '')
+  category = request.args.get('category', '')
+  year = request.args.get('year', '')
+  quality = request.args.get('quality', '')
+
+  # بناء رابط التصفية المباشر لـ أكوام
+  query_params = [f'page={page}']
+
+  if section:
+    query_params.append(f'section={section}')
+  if category:
+    query_params.append(f'category={category}')
+  if year:
+    query_params.append(f'year={year}')
+  if quality:
+    query_params.append(f'quality={quality}')
+
+  query_string = '&'.join(query_params)
+  catalog_url = f'{AKWAM_BASE_DOMAIN}/{cat_type}?{query_string}'
+
   try:
     res = requests.get(
         catalog_url, headers=get_akwam_headers(catalog_url), timeout=8
@@ -231,7 +244,7 @@ def get_catalog():
 
     items = parse_akwam_cards(soup)
 
-    # استخراج أرقام الصفحات
+    # استخراج أرقام الصفحات للترقيم
     page_links = soup.select('ul.pagination a, a.page-link')
     pages = [
         p.get_text(strip=True)
@@ -243,14 +256,31 @@ def get_catalog():
     return jsonify({
         'status': 'success',
         'data': {
+            'type': cat_type,
+            'filters': {
+                'section': section or 'all',
+                'category': category or 'all',
+                'year': year or 'all',
+                'quality': quality or 'all',
+            },
             'current_page': int(page),
             'total_pages': max_page,
+            'has_next_page': int(page) < max_page,
             'items_count': len(items),
             'items': items,
         },
     })
   except Exception as e:
     return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+
+
+
+
+
+
+
 
 
 # 🔍 د) البحث الشامل
