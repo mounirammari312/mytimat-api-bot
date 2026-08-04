@@ -6,24 +6,28 @@ import requests
 
 app = Flask(__name__)
 
+# --- إعدادات TMDB API ---
 TMDB_API_KEY = "15d2fd480251d4e1f31be9d76d471906"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
 TMDB_HEADERS = {
     'User-Agent': (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        ' (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     ),
     'Accept': 'application/json',
 }
 
 
+# --- دالة معالجة وتشفير الروابط العربية لمنع خطأ latin-1 ---
 def safe_url(url):
-  """تحويل الروابط التي تحتوي على حروف عربية إلى ترميز ASCII آمن"""
+  """تحويل الروابط التي تحتوي على حروف عربية إلى ترميز ASCII آمن للـ Headers"""
   if not url:
     return url
   return quote(url, safe=':/?&=#%')
 
 
+# --- الاكتشاف الديناميكي لنطاق أكوام النشط ---
 def get_active_akwam_domain():
   try:
     res = requests.get(
@@ -46,6 +50,7 @@ def get_akwam_headers(referer_url=None):
   return {
       'User-Agent': (
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          ' (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
       ),
       'Referer': ref,
   }
@@ -55,6 +60,7 @@ def format_poster(poster_path):
   return f'https://image.tmdb.org/t/p/w500{poster_path}' if poster_path else ''
 
 
+# --- محرك تشريح وتقشير بطاقات الكتالوج ---
 def parse_akwam_cards(soup):
   card_containers = soup.select(
       'div.widget-body div.col-lg-2, div.widget-body div.col-md-3,'
@@ -112,6 +118,10 @@ def parse_akwam_cards(soup):
   return items
 
 
+# --- نقاط الـ API ---
+
+
+# 🟢 1. فحص الحالة العامة للسيرفر
 @app.route('/', methods=['GET'])
 def index():
   return jsonify({
@@ -122,6 +132,7 @@ def index():
   })
 
 
+# 🌐 2. الشاشة الرئيسية الهجينة
 @app.route('/api/home', methods=['GET'])
 def get_home():
   try:
@@ -187,11 +198,15 @@ def get_home():
             {
                 'key': 'trending_movies',
                 'title': '🔥 الأفلام الأكثر شهرة',
+                'has_see_all': True,
+                'see_all_params': {'type': 'movies', 'page': 1},
                 'items': trending_movies,
             },
             {
                 'key': 'trending_tv',
                 'title': '📺 المسلسلات الأكثر مشاهدة',
+                'has_see_all': True,
+                'see_all_params': {'type': 'series', 'page': 1},
                 'items': trending_tv,
             },
         ],
@@ -200,6 +215,7 @@ def get_home():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+# 📂 3. نقطة الكتالوج الشاملة (لزر "عرض الكل" والترقيم والفلترة)
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
   cat_type = request.args.get('type', 'movies').lower()
@@ -242,8 +258,15 @@ def get_catalog():
         'status': 'success',
         'data': {
             'type': cat_type,
+            'filters': {
+                'section': section or 'all',
+                'category': category or 'all',
+                'year': year or 'all',
+                'quality': quality or 'all',
+            },
             'current_page': int(page),
             'total_pages': max_page,
+            'has_next_page': int(page) < max_page,
             'items_count': len(items),
             'items': items,
         },
@@ -252,7 +275,39 @@ def get_catalog():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 🌀 تفاصيل المسلسل مع دعم المعالجة الآمنة للروابط العربية
+# 🔍 4. البحث المباشر
+@app.route('/api/search', methods=['GET'])
+def search():
+  query = request.args.get('q', '')
+  if not query:
+    return jsonify({'status': 'error', 'message': 'Query missing'}), 400
+
+  try:
+    search_url = f'{TMDB_BASE_URL}/search/multi?api_key={TMDB_API_KEY}&query={query}&language=ar-SA'
+    res = requests.get(search_url, headers=TMDB_HEADERS, timeout=8).json()
+
+    items = []
+    for item in res.get('results', []):
+      m_type = item.get('media_type')
+      if m_type in ['movie', 'tv']:
+        items.append({
+            'id': str(item.get('id')),
+            'title': (
+                item.get('title')
+                or item.get('name')
+                or item.get('original_title')
+            ),
+            'poster': format_poster(item.get('poster_path')),
+            'rating': round(item.get('vote_average', 0), 1),
+            'type': m_type,
+        })
+
+    return jsonify({'status': 'success', 'data': items})
+  except Exception as e:
+    return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# 🌀 5. تفاصيل المسلسل (المواسم والحلقات)
 @app.route('/api/series-details', methods=['GET'])
 def get_series_details():
   series_url = request.args.get('url', '')
@@ -296,7 +351,7 @@ def get_series_details():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 🎬 اقتناص روابط البث مع دعم الحروف العربية
+# 🎬 6. اقتناص روابط البث المباشرة (.mp4)
 @app.route('/api/stream', methods=['GET'])
 def get_direct_stream():
   title = request.args.get('title', '')
