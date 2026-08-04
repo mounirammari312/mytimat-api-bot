@@ -6,8 +6,8 @@ import requests
 
 app = Flask(__name__)
 
-# --- إعدادات TMDB API (مفتاحك الشخصي المفعل والمحصن) ---
-TMDB_API_KEY = ""
+# --- إعدادات TMDB API ---
+TMDB_API_KEY = "65687d1e167bc35f38ee0c88c3a37b74"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
 TMDB_HEADERS = {
@@ -19,15 +19,14 @@ TMDB_HEADERS = {
 }
 
 
-# --- 1. دالة معالجة وتشفير الروابط العربية لمنع خطأ latin-1 / HTTP 500 ---
+# --- 1. تشفير الروابط العربية ---
 def safe_url(url):
-  """تحويل الروابط التي تحتوي على حروف عربية إلى ترميز ASCII آمن للـ Headers"""
   if not url:
     return url
   return quote(url, safe=':/?&=#%')
 
 
-# --- 2. الاكتشاف الديناميكي لنطاق أكوام النشط ---
+# --- 2. الاكتشاف الديناميكي لنطاق أكوام ---
 def get_active_akwam_domain():
   try:
     res = requests.get(
@@ -56,20 +55,18 @@ def get_akwam_headers(referer_url=None):
   }
 
 
-# --- 3. دوال معالجة وتحسين جودة الصور (HD Poster & Backdrop) ---
+# --- 3. تحسين جودة الصور ---
 def format_poster(poster_path):
-  """بوستر عمودي عالي الجودة للبطاقات (w780)"""
   return f'https://image.tmdb.org/t/p/w780{poster_path}' if poster_path else ''
 
 
 def format_backdrop(backdrop_path):
-  """غلاف أفقي عالي الجودة للسلايدر العلوي (w1280 HD)"""
   return (
       f'https://image.tmdb.org/t/p/w1280{backdrop_path}' if backdrop_path else ''
   )
 
 
-# --- 4. محرك تشريح وتقشير بطاقات الكتالوج ---
+# --- 4. تشريح بطاقات أكوام ---
 def parse_akwam_cards(soup):
   card_containers = soup.select(
       'div.widget-body div.col-lg-2, div.widget-body div.col-md-3,'
@@ -117,11 +114,13 @@ def parse_akwam_cards(soup):
     media_type = 'series' if '/series/' in href else 'movie'
 
     items.append({
+        'id': href,
         'title': title,
         'url': href,
         'poster': poster_url,
-        'backdrop': poster_url,  # احتياط في حال عدم وجود غلاف أفقي
-        'tags': badges,
+        'backdrop': poster_url,
+        'tags': badges if badges else ['HD'],
+        'rating': 0.0,
         'type': media_type,
     })
 
@@ -129,29 +128,27 @@ def parse_akwam_cards(soup):
 
 
 # ==========================================
-# نقاط الـ API المكتملة
+# Endpoints
 # ==========================================
 
 
-# 🟢 أ) فحص الحالة العامة للسيرفر
 @app.route('/', methods=['GET'])
 def index():
   return jsonify({
       'status': 'online',
       'engine': 'Akwam Direct Scraping Engine',
       'active_domain': AKWAM_BASE_DOMAIN,
-      'version': '1.5.0',
+      'version': '1.6.0',
   })
 
 
-# 🌐 ب) الشاشة الرئيسية الهجينة (محصنة وموحدة البيانات لعدم انهيار الأندرويد)
 @app.route('/api/home', methods=['GET'])
 def get_home():
   try:
     trending_movies = []
     trending_tv = []
 
-    # 1. محاولة الجلب الآمن من TMDB
+    # 1. جلب بيانات TMDB مع تزويد كافة الحقول الوقائية للأندرويد
     try:
       movies_url = f'{TMDB_BASE_URL}/trending/movie/week?api_key={TMDB_API_KEY}&language=ar-SA'
       tv_url = (
@@ -165,13 +162,23 @@ def get_home():
         trending_movies = [
             {
                 'id': str(m.get('id', '')),
-                'url': '',  # حقل آمن لمنع انهيار الأندرويد
+                'url': (
+                    f"{AKWAM_BASE_DOMAIN}/search?q={quote(m.get('title') or m.get('original_title', ''))}"
+                ),
                 'title': m.get('title') or m.get('original_title', ''),
                 'poster': format_poster(m.get('poster_path')),
                 'backdrop': format_backdrop(
                     m.get('backdrop_path') or m.get('poster_path')
                 ),
                 'rating': round(m.get('vote_average', 0), 1),
+                'tags': [
+                    'TMDB',
+                    (
+                        str(m.get('release_date', '')[:4])
+                        if m.get('release_date')
+                        else '2026'
+                    ),
+                ],
                 'type': 'movie',
             }
             for m in m_res.json().get('results', [])[:10]
@@ -182,13 +189,23 @@ def get_home():
         trending_tv = [
             {
                 'id': str(t.get('id', '')),
-                'url': '',  # حقل آمن لمنع انهيار الأندرويد
+                'url': (
+                    f"{AKWAM_BASE_DOMAIN}/search?q={quote(t.get('name') or t.get('original_name', ''))}"
+                ),
                 'title': t.get('name') or t.get('original_name', ''),
                 'poster': format_poster(t.get('poster_path')),
                 'backdrop': format_backdrop(
                     t.get('backdrop_path') or t.get('poster_path')
                 ),
                 'rating': round(t.get('vote_average', 0), 1),
+                'tags': [
+                    'TMDB',
+                    (
+                        str(t.get('first_air_date', '')[:4])
+                        if t.get('first_air_date')
+                        else '2026'
+                    ),
+                ],
                 'type': 'tv',
             }
             for t in t_res.json().get('results', [])[:10]
@@ -197,7 +214,7 @@ def get_home():
     except Exception as tmdb_err:
       print(f'⚠️ TMDB Fetch Error: {tmdb_err}')
 
-    # 2. التراجع الآمن إلى أكوام في حال عدم توفر البيانات من TMDB
+    # 2. التراجع الآمن إلى أكوام
     if not trending_movies:
       res_m = requests.get(
           f'{AKWAM_BASE_DOMAIN}/movies',
@@ -205,18 +222,7 @@ def get_home():
           timeout=6,
       )
       soup_m = BeautifulSoup(res_m.text, 'html.parser')
-      trending_movies = [
-          {
-              'id': item.get('url', ''),
-              'url': item.get('url', ''),
-              'title': item.get('title', ''),
-              'poster': item.get('poster', ''),
-              'backdrop': item.get('poster', ''),
-              'rating': 0.0,
-              'type': 'movie',
-          }
-          for item in parse_akwam_cards(soup_m)[:10]
-      ]
+      trending_movies = parse_akwam_cards(soup_m)[:10]
 
     if not trending_tv:
       res_t = requests.get(
@@ -225,18 +231,7 @@ def get_home():
           timeout=6,
       )
       soup_t = BeautifulSoup(res_t.text, 'html.parser')
-      trending_tv = [
-          {
-              'id': item.get('url', ''),
-              'url': item.get('url', ''),
-              'title': item.get('title', ''),
-              'poster': item.get('poster', ''),
-              'backdrop': item.get('poster', ''),
-              'rating': 0.0,
-              'type': 'tv',
-          }
-          for item in parse_akwam_cards(soup_t)[:10]
-      ]
+      trending_tv = parse_akwam_cards(soup_t)[:10]
 
     return jsonify({
         'status': 'success',
@@ -261,7 +256,6 @@ def get_home():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 📂 ج) نقطة الكتالوج الشاملة (لزر "عرض الكل" والترقيم والفلترة)
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
   cat_type = request.args.get('type', 'movies').lower()
@@ -321,7 +315,6 @@ def get_catalog():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 🔍 د) البحث المباشر
 @app.route('/api/search', methods=['GET'])
 def search():
   query = request.args.get('q', '')
@@ -338,6 +331,9 @@ def search():
       if m_type in ['movie', 'tv']:
         items.append({
             'id': str(item.get('id')),
+            'url': (
+                f"{AKWAM_BASE_DOMAIN}/search?q={quote(item.get('title') or item.get('name') or '')}"
+            ),
             'title': (
                 item.get('title')
                 or item.get('name')
@@ -348,6 +344,7 @@ def search():
                 item.get('backdrop_path') or item.get('poster_path')
             ),
             'rating': round(item.get('vote_average', 0), 1),
+            'tags': ['TMDB'],
             'type': m_type,
         })
 
@@ -356,7 +353,6 @@ def search():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 🌀 هـ) تفاصيل المسلسل (المواسم والحلقات)
 @app.route('/api/series-details', methods=['GET'])
 def get_series_details():
   series_url = request.args.get('url', '')
@@ -400,7 +396,6 @@ def get_series_details():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 🎬 و) اقتناص روابط البث المباشرة (.mp4)
 @app.route('/api/stream', methods=['GET'])
 def get_direct_stream():
   title = request.args.get('title', '')
