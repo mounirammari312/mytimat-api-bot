@@ -19,7 +19,7 @@ TMDB_HEADERS = {
 }
 
 
-# --- دالة معالجة وتشفير الروابط العربية لمنع خطأ latin-1 ---
+# --- 1. دالة معالجة وتشفير الروابط العربية لمنع خطأ latin-1 / HTTP 500 ---
 def safe_url(url):
   """تحويل الروابط التي تحتوي على حروف عربية إلى ترميز ASCII آمن للـ Headers"""
   if not url:
@@ -27,7 +27,7 @@ def safe_url(url):
   return quote(url, safe=':/?&=#%')
 
 
-# --- الاكتشاف الديناميكي لنطاق أكوام النشط ---
+# --- 2. الاكتشاف الديناميكي لنطاق أكوام النشط ---
 def get_active_akwam_domain():
   try:
     res = requests.get(
@@ -56,11 +56,20 @@ def get_akwam_headers(referer_url=None):
   }
 
 
+# --- 3. دوال معالجة وتحسين جودة الصور (HD Poster & Backdrop) ---
 def format_poster(poster_path):
-  return f'https://image.tmdb.org/t/p/w500{poster_path}' if poster_path else ''
+  """بوستر عمودي عالي الجودة للبطاقات (w780)"""
+  return f'https://image.tmdb.org/t/p/w780{poster_path}' if poster_path else ''
 
 
-# --- محرك تشريح وتقشير بطاقات الكتالوج ---
+def format_backdrop(backdrop_path):
+  """غلاف أفقي عالي الجودة للسلايدر العلوي (w1280 HD)"""
+  return (
+      f'https://image.tmdb.org/t/p/w1280{backdrop_path}' if backdrop_path else ''
+  )
+
+
+# --- 4. محرك تشريح وتقشير بطاقات الكتالوج ---
 def parse_akwam_cards(soup):
   card_containers = soup.select(
       'div.widget-body div.col-lg-2, div.widget-body div.col-md-3,'
@@ -111,6 +120,7 @@ def parse_akwam_cards(soup):
         'title': title,
         'url': href,
         'poster': poster_url,
+        'backdrop': poster_url,  # احتياط في حال عدم وجود غلاف أفقي
         'tags': badges,
         'type': media_type,
     })
@@ -118,21 +128,21 @@ def parse_akwam_cards(soup):
   return items
 
 
-# --- نقاط الـ API ---
+# --- نقاط الـ API المكتملة ---
 
 
-# 🟢 1. فحص الحالة العامة للسيرفر
+# 🟢 أ) فحص الحالة العامة للسيرفر
 @app.route('/', methods=['GET'])
 def index():
   return jsonify({
       'status': 'online',
       'engine': 'Akwam Direct Scraping Engine',
       'active_domain': AKWAM_BASE_DOMAIN,
-      'version': '1.3.0',
+      'version': '1.4.0',
   })
 
 
-# 🌐 2. الشاشة الرئيسية الهجينة
+# 🌐 ب) الشاشة الرئيسية الهجينة (دعم غلاف HD أفقي للسلايدر)
 @app.route('/api/home', methods=['GET'])
 def get_home():
   try:
@@ -153,6 +163,9 @@ def get_home():
               'id': str(m.get('id')),
               'title': m.get('title') or m.get('original_title'),
               'poster': format_poster(m.get('poster_path')),
+              'backdrop': format_backdrop(
+                  m.get('backdrop_path') or m.get('poster_path')
+              ),
               'rating': round(m.get('vote_average', 0), 1),
               'type': 'movie',
           }
@@ -165,6 +178,9 @@ def get_home():
               'id': str(t.get('id')),
               'title': t.get('name') or t.get('original_name'),
               'poster': format_poster(t.get('poster_path')),
+              'backdrop': format_backdrop(
+                  t.get('backdrop_path') or t.get('poster_path')
+              ),
               'rating': round(t.get('vote_average', 0), 1),
               'type': 'tv',
           }
@@ -215,7 +231,7 @@ def get_home():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 📂 3. نقطة الكتالوج الشاملة (لزر "عرض الكل" والترقيم والفلترة)
+# 📂 ج) نقطة الكتالوج الشاملة (لزر "عرض الكل" والترقيم والفلترة)
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
   cat_type = request.args.get('type', 'movies').lower()
@@ -275,7 +291,7 @@ def get_catalog():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 🔍 4. البحث المباشر
+# 🔍 د) البحث المباشر
 @app.route('/api/search', methods=['GET'])
 def search():
   query = request.args.get('q', '')
@@ -298,6 +314,9 @@ def search():
                 or item.get('original_title')
             ),
             'poster': format_poster(item.get('poster_path')),
+            'backdrop': format_backdrop(
+                item.get('backdrop_path') or item.get('poster_path')
+            ),
             'rating': round(item.get('vote_average', 0), 1),
             'type': m_type,
         })
@@ -307,7 +326,7 @@ def search():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 🌀 5. تفاصيل المسلسل (المواسم والحلقات)
+# 🌀 هـ) تفاصيل المسلسل (المواسم والحلقات)
 @app.route('/api/series-details', methods=['GET'])
 def get_series_details():
   series_url = request.args.get('url', '')
@@ -351,7 +370,7 @@ def get_series_details():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 🎬 6. اقتناص روابط البث المباشرة (.mp4)
+# 🎬 و) اقتناص روابط البث المباشرة (.mp4)
 @app.route('/api/stream', methods=['GET'])
 def get_direct_stream():
   title = request.args.get('title', '')
