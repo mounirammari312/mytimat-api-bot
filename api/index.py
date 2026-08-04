@@ -128,39 +128,66 @@ def index():
   })
 
 
-# 🌐 ب) الواجهة الرئيسية (TMDB Feed)
 @app.route('/api/home', methods=['GET'])
 def get_home():
   try:
-    movies_url = f'{TMDB_BASE_URL}/trending/movie/week?api_key={TMDB_API_KEY}&language=ar-SA'
-    tv_url = f'{TMDB_BASE_URL}/trending/tv/week?api_key={TMDB_API_KEY}&language=ar-SA'
+    trending_movies = []
+    trending_tv = []
 
-    movies_res = requests.get(
-        movies_url, headers=TMDB_HEADERS, timeout=8
-    ).json()
-    tv_res = requests.get(tv_url, headers=TMDB_HEADERS, timeout=8).json()
+    # 1. محاولة الجلب من TMDB أولاً
+    try:
+      movies_url = f'{TMDB_BASE_URL}/trending/movie/week?api_key={TMDB_API_KEY}&language=ar-SA'
+      tv_url = f'{TMDB_BASE_URL}/trending/tv/week?api_key={TMDB_API_KEY}&language=ar-SA'
 
-    trending_movies = [
-        {
-            'id': str(m.get('id')),
-            'title': m.get('title') or m.get('original_title'),
-            'poster': format_poster(m.get('poster_path')),
-            'rating': round(m.get('vote_average', 0), 1),
-            'type': 'movie',
-        }
-        for m in movies_res.get('results', [])[:10]
-    ]
+      movies_res = requests.get(
+          movies_url, headers=TMDB_HEADERS, timeout=5
+      ).json()
+      tv_res = requests.get(tv_url, headers=TMDB_HEADERS, timeout=5).json()
 
-    trending_tv = [
-        {
-            'id': str(t.get('id')),
-            'title': t.get('name') or t.get('original_name'),
-            'poster': format_poster(t.get('poster_path')),
-            'rating': round(t.get('vote_average', 0), 1),
-            'type': 'tv',
-        }
-        for t in tv_res.get('results', [])[:10]
-    ]
+      trending_movies = [
+          {
+              'id': str(m.get('id')),
+              'title': m.get('title') or m.get('original_title'),
+              'poster': format_poster(m.get('poster_path')),
+              'rating': round(m.get('vote_average', 0), 1),
+              'type': 'movie',
+          }
+          for m in movies_res.get('results', [])[:10]
+          if m.get('poster_path')
+      ]
+
+      trending_tv = [
+          {
+              'id': str(t.get('id')),
+              'title': t.get('name') or t.get('original_name'),
+              'poster': format_poster(t.get('poster_path')),
+              'rating': round(t.get('vote_average', 0), 1),
+              'type': 'tv',
+          }
+          for t in tv_res.get('results', [])[:10]
+          if t.get('poster_path')
+      ]
+    except Exception as tmdb_err:
+      print(f'⚠️ TMDB Fallback Triggered: {tmdb_err}')
+
+    # 2. خطة الاحتياط (Fallback): إذا كانت القائمة فارغة، جلب من كتالوج أكوام المباشر فوراً
+    if not trending_movies:
+      res_akwam = requests.get(
+          f'{AKWAM_BASE_DOMAIN}/movies',
+          headers=get_akwam_headers(),
+          timeout=6,
+      )
+      soup = BeautifulSoup(res_akwam.text, 'html.parser')
+      trending_movies = parse_akwam_cards(soup)[:10]
+
+    if not trending_tv:
+      res_akwam_tv = requests.get(
+          f'{AKWAM_BASE_DOMAIN}/series',
+          headers=get_akwam_headers(),
+          timeout=6,
+      )
+      soup_tv = BeautifulSoup(res_akwam_tv.text, 'html.parser')
+      trending_tv = parse_akwam_cards(soup_tv)[:10]
 
     return jsonify({
         'status': 'success',
@@ -179,6 +206,14 @@ def get_home():
     })
   except Exception as e:
     return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+
+
+
+
+
+
 
 
 # 📂 ج) تصفح الكتالوجات مع الترقيم (Pagination)
