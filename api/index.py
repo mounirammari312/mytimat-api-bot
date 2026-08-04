@@ -7,7 +7,7 @@ from flask import Flask, Response, jsonify, request
 import requests
 
 # ==============================================================================
-# إعدادات التطبيق والسيرفر الرئيسي (Vercel Serverless Entrypoint)
+# 🛠️ إعدادات السيرفر الرئيسي (Vercel Serverless Entrypoint)
 # ==============================================================================
 
 app = Flask(__name__)
@@ -25,9 +25,8 @@ TMDB_HEADERS = {
 
 LARROZA_BASE_DOMAIN = 'https://larroza.mom'
 
-
 # ==============================================================================
-# 1. الدوال المساعدة وتفكيك تشفير Dean Edwards
+# 1. جلب دومين أكوام الشغال تلقائياً وتفكيك التشفير
 # ==============================================================================
 
 DIGITS = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
@@ -71,13 +70,12 @@ def get_active_akwam_domain():
     res = requests.get(
         'https://ak.sv/',
         headers=TMDB_HEADERS,
-        timeout=4,
+        timeout=3,
         allow_redirects=True,
     )
     parsed = urlparse(res.url)
     return f'{parsed.scheme}://{parsed.netloc}'
-  except Exception as e:
-    print(f'⚠️ Error resolving Akwam active domain: {e}')
+  except Exception:
     return 'https://akwam.it'
 
 
@@ -93,7 +91,7 @@ def get_akwam_headers(referer_url=None):
 
 
 # ==============================================================================
-# 2. دوال تنسيق بطاقات أكوام و TMDB
+# 2. تنسيق بطاقات أكوام و TMDB
 # ==============================================================================
 
 
@@ -169,25 +167,22 @@ def parse_akwam_cards(soup):
 
 
 # ==============================================================================
-# 3. محركات الكشط السريعة والمعالجة
+# 3. محركات الكشط الاحتياطية للسيرفر (Fallback Scrapers - Timeout 3.5s)
 # ==============================================================================
 
 
 def fetch_akwam_stream(title, orig_title, media_type):
-  """كشط روابط أكوام المباشرة مع إزالة الأسماء المكررة."""
   search_queries = list(
       dict.fromkeys([q.strip() for q in [title, orig_title] if q and q.strip()])
   )
-
   try:
     card = None
     for q in search_queries:
       search_url = safe_url(f'{AKWAM_BASE_DOMAIN}/search?q={q}')
       search_res = requests.get(
-          search_url, headers=get_akwam_headers(), timeout=5
+          search_url, headers=get_akwam_headers(), timeout=3.5
       )
       soup = BeautifulSoup(search_res.text, 'html.parser')
-
       selector = (
           'a[href*="/movie/"]'
           if media_type == 'movie'
@@ -209,7 +204,7 @@ def fetch_akwam_stream(title, orig_title, media_type):
       series_res = requests.get(
           safe_url(item_url),
           headers=get_akwam_headers(item_url),
-          timeout=5,
+          timeout=3.5,
       )
       soup_s = BeautifulSoup(series_res.text, 'html.parser')
       ep_card = soup_s.select_one('a[href*="/episode/"]')
@@ -218,9 +213,8 @@ def fetch_akwam_stream(title, orig_title, media_type):
         if not target_url.startswith('http'):
           target_url = f"{AKWAM_BASE_DOMAIN}/{target_url.lstrip('/')}"
 
-    target_url = safe_url(target_url)
     res_target = requests.get(
-        target_url, headers=get_akwam_headers(target_url), timeout=5
+        safe_url(target_url), headers=get_akwam_headers(target_url), timeout=3.5
     )
     soup_t = BeautifulSoup(res_target.text, 'html.parser')
     watch_btn = soup_t.select_one('a[href*="/watch/"], a.link-btn')
@@ -232,11 +226,9 @@ def fetch_akwam_stream(title, orig_title, media_type):
     if not watch_url.startswith('http'):
       watch_url = f"{AKWAM_BASE_DOMAIN}/{watch_url.lstrip('/')}"
 
-    watch_url = safe_url(watch_url)
     res_w = requests.get(
-        watch_url, headers=get_akwam_headers(watch_url), timeout=5
+        safe_url(watch_url), headers=get_akwam_headers(watch_url), timeout=3.5
     )
-
     raw_links = re.findall(
         r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*', res_w.text
     )
@@ -248,26 +240,19 @@ def fetch_akwam_stream(title, orig_title, media_type):
 
     qualities = []
     for idx, u in enumerate(unique_links):
-      if '1080' in u:
-        q_label = '1080p FHD (أكوام)'
-      elif '720' in u:
-        q_label = '720p HD (أكوام)'
-      elif '480' in u:
-        q_label = '480p SD (أكوام)'
-      else:
-        q_label = f'سيرفر مباشر {idx+1}'
-
+      q_label = (
+          '1080p FHD (أكوام)'
+          if '1080' in u
+          else ('720p HD (أكوام)' if '720' in u else '480p SD (أكوام)')
+      )
       qualities.append({'quality': q_label, 'url': u, 'is_default': idx == 0})
 
     return qualities if qualities else None
-
-  except Exception as e:
-    print(f'⚠️ Akwam Scraper Exception: {e}')
+  except Exception:
     return None
 
 
 def fetch_larroza_stream(title, orig_title, host_url):
-  """كشط موقع لاروزا مع إزالة الأسماء المكررة وتقليل مهلة الانتظار."""
   search_queries = list(
       dict.fromkeys([q.strip() for q in [title, orig_title] if q and q.strip()])
   )
@@ -279,27 +264,22 @@ def fetch_larroza_stream(title, orig_title, host_url):
   for query in search_queries:
     try:
       search_url = f'{LARROZA_BASE_DOMAIN}/search.php?keywords={quote(query)}'
-      res_search = requests.get(search_url, headers=headers, timeout=5)
+      res_search = requests.get(search_url, headers=headers, timeout=3.5)
       soup_search = BeautifulSoup(res_search.text, 'html.parser')
-
       video_links = [
           a['href']
           for a in soup_search.find_all('a', href=True)
           if 'video.php' in a['href']
       ]
-
       if not video_links:
         continue
 
-      target_video = video_links[0]
-
-      embed_page_url = target_video.replace('video.php', 'embed.php')
+      embed_page_url = video_links[0].replace('video.php', 'embed.php')
       if not embed_page_url.startswith('http'):
         embed_page_url = urljoin(LARROZA_BASE_DOMAIN, embed_page_url)
 
-      res_embed = requests.get(embed_page_url, headers=headers, timeout=5)
+      res_embed = requests.get(embed_page_url, headers=headers, timeout=3.5)
       soup_embed = BeautifulSoup(res_embed.text, 'html.parser')
-
       iframes = soup_embed.find_all('iframe')
       if not iframes:
         continue
@@ -312,8 +292,7 @@ def fetch_larroza_stream(title, orig_title, host_url):
           'User-Agent': TMDB_HEADERS['User-Agent'],
           'Referer': 'https://larroza.mom/',
       }
-      res_okhd = requests.get(okhd_embed_url, headers=emb_headers, timeout=5)
-
+      res_okhd = requests.get(okhd_embed_url, headers=emb_headers, timeout=3.5)
       unpacked = unpack_dean_edwards(res_okhd.text)
       m3u8_matches = re.findall(
           r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', unpacked
@@ -326,21 +305,18 @@ def fetch_larroza_stream(title, orig_title, host_url):
             'Referer': okhd_embed_url,
         })
         proxy_url = f'{host_url}hls-proxy?url={quote(raw_stream)}&headers={quote(h_json)}'
-
         return [{
             'quality': 'سيرفر لاروزا (HLS بروكسي)',
             'url': proxy_url,
             'is_default': True,
         }]
-    except Exception as e:
-      print(f'⚠️ Larroza Scraper Exception for query {query}: {e}')
+    except Exception:
       continue
-
   return None
 
 
 # ==============================================================================
-# 4. مسارات الـ API (Flask Routes)
+# 4. مسارات ה- API (Flask Routes)
 # ==============================================================================
 
 
@@ -348,9 +324,9 @@ def fetch_larroza_stream(title, orig_title, host_url):
 def index():
   return jsonify({
       'status': 'online',
-      'engine': 'Fast Parallel Engine (Akwam + Larroza)',
+      'mode': 'Hybrid Fast Backend',
       'active_domain': AKWAM_BASE_DOMAIN,
-      'version': '3.5.0',
+      'version': '4.0.0',
   })
 
 
@@ -370,7 +346,7 @@ def hls_proxy():
 
   try:
     resp = requests.get(
-        target_url, headers=headers_dict, stream=True, timeout=10
+        target_url, headers=headers_dict, stream=True, timeout=8
     )
     content_type = resp.headers.get('Content-Type', '')
 
@@ -411,93 +387,72 @@ def hls_proxy():
 @app.route('/api/home', methods=['GET'])
 def get_home():
   try:
+    movies_url = f'{TMDB_BASE_URL}/trending/movie/week?api_key={TMDB_API_KEY}&language=ar-SA'
+    tv_url = (
+        f'{TMDB_BASE_URL}/trending/tv/week?api_key={TMDB_API_KEY}&language=ar-SA'
+    )
+
+    m_res = requests.get(movies_url, headers=TMDB_HEADERS, timeout=4)
+    t_res = requests.get(tv_url, headers=TMDB_HEADERS, timeout=4)
+
     trending_movies = []
     trending_tv = []
 
-    try:
-      movies_url = f'{TMDB_BASE_URL}/trending/movie/week?api_key={TMDB_API_KEY}&language=ar-SA'
-      tv_url = (
-          f'{TMDB_BASE_URL}/trending/tv/week?api_key={TMDB_API_KEY}&language=ar-SA'
-      )
+    if m_res.status_code == 200:
+      trending_movies = [
+          {
+              'id': str(m.get('id', '')),
+              'url': (
+                  f"{AKWAM_BASE_DOMAIN}/search?q={quote(m.get('title') or m.get('original_title', ''))}"
+              ),
+              'title': m.get('title') or m.get('original_title', ''),
+              'original_title': m.get('original_title', ''),
+              'poster': format_poster(m.get('poster_path')),
+              'backdrop': format_backdrop(
+                  m.get('backdrop_path') or m.get('poster_path')
+              ),
+              'rating': round(m.get('vote_average', 0), 1),
+              'tags': [
+                  'TMDB',
+                  (
+                      str(m.get('release_date', '')[:4])
+                      if m.get('release_date')
+                      else '2026'
+                  ),
+              ],
+              'type': 'movie',
+          }
+          for m in m_res.json().get('results', [])[:10]
+          if m.get('poster_path')
+      ]
 
-      m_res = requests.get(movies_url, headers=TMDB_HEADERS, timeout=5)
-      t_res = requests.get(tv_url, headers=TMDB_HEADERS, timeout=5)
-
-      if m_res.status_code == 200:
-        trending_movies = [
-            {
-                'id': str(m.get('id', '')),
-                'url': (
-                    f"{AKWAM_BASE_DOMAIN}/search?q={quote(m.get('title') or m.get('original_title', ''))}"
-                ),
-                'title': m.get('title') or m.get('original_title', ''),
-                'original_title': m.get('original_title', ''),
-                'poster': format_poster(m.get('poster_path')),
-                'backdrop': format_backdrop(
-                    m.get('backdrop_path') or m.get('poster_path')
-                ),
-                'rating': round(m.get('vote_average', 0), 1),
-                'tags': [
-                    'TMDB',
-                    (
-                        str(m.get('release_date', '')[:4])
-                        if m.get('release_date')
-                        else '2026'
-                    ),
-                ],
-                'type': 'movie',
-            }
-            for m in m_res.json().get('results', [])[:10]
-            if m.get('poster_path')
-        ]
-
-      if t_res.status_code == 200:
-        trending_tv = [
-            {
-                'id': str(t.get('id', '')),
-                'url': (
-                    f"{AKWAM_BASE_DOMAIN}/search?q={quote(t.get('name') or t.get('original_name', ''))}"
-                ),
-                'title': t.get('name') or t.get('original_name', ''),
-                'original_title': t.get('original_name', ''),
-                'poster': format_poster(t.get('poster_path')),
-                'backdrop': format_backdrop(
-                    t.get('backdrop_path') or t.get('poster_path')
-                ),
-                'rating': round(t.get('vote_average', 0), 1),
-                'tags': [
-                    'TMDB',
-                    (
-                        str(t.get('first_air_date', '')[:4])
-                        if t.get('first_air_date')
-                        else '2026'
-                    ),
-                ],
-                'type': 'tv',
-            }
-            for t in t_res.json().get('results', [])[:10]
-            if t.get('poster_path')
-        ]
-    except Exception as tmdb_err:
-      print(f'⚠️ TMDB Fetch Exception: {tmdb_err}')
-
-    if not trending_movies:
-      res_m = requests.get(
-          f'{AKWAM_BASE_DOMAIN}/movies',
-          headers=get_akwam_headers(),
-          timeout=5,
-      )
-      soup_m = BeautifulSoup(res_m.text, 'html.parser')
-      trending_movies = parse_akwam_cards(soup_m)[:10]
-
-    if not trending_tv:
-      res_t = requests.get(
-          f'{AKWAM_BASE_DOMAIN}/series',
-          headers=get_akwam_headers(),
-          timeout=5,
-      )
-      soup_t = BeautifulSoup(res_t.text, 'html.parser')
-      trending_tv = parse_akwam_cards(soup_t)[:10]
+    if t_res.status_code == 200:
+      trending_tv = [
+          {
+              'id': str(t.get('id', '')),
+              'url': (
+                  f"{AKWAM_BASE_DOMAIN}/search?q={quote(t.get('name') or t.get('original_name', ''))}"
+              ),
+              'title': t.get('name') or t.get('original_name', ''),
+              'original_title': t.get('original_name', ''),
+              'poster': format_poster(t.get('poster_path')),
+              'backdrop': format_backdrop(
+                  t.get('backdrop_path') or t.get('poster_path')
+              ),
+              'rating': round(t.get('vote_average', 0), 1),
+              'tags': [
+                  'TMDB',
+                  (
+                      str(t.get('first_air_date', '')[:4])
+                      if t.get('first_air_date')
+                      else '2026'
+                  ),
+              ],
+              'type': 'tv',
+          }
+          for t in t_res.json().get('results', [])[:10]
+          if t.get('poster_path')
+      ]
 
     return jsonify({
         'status': 'success',
@@ -527,52 +482,20 @@ def get_catalog():
   cat_type = request.args.get('type', 'movies').lower()
   page = request.args.get('page', '1')
 
-  section = request.args.get('section', '')
-  category = request.args.get('category', '')
-  year = request.args.get('year', '')
-  quality = request.args.get('quality', '')
-
-  query_params = [f'page={page}']
-  if section:
-    query_params.append(f'section={section}')
-  if category:
-    query_params.append(f'category={category}')
-  if year:
-    query_params.append(f'year={year}')
-  if quality:
-    query_params.append(f'quality={quality}')
-
-  query_string = '&'.join(query_params)
-  catalog_url = safe_url(f'{AKWAM_BASE_DOMAIN}/{cat_type}?{query_string}')
+  catalog_url = safe_url(f'{AKWAM_BASE_DOMAIN}/{cat_type}?page={page}')
 
   try:
     res = requests.get(
-        catalog_url, headers=get_akwam_headers(catalog_url), timeout=6
+        catalog_url, headers=get_akwam_headers(catalog_url), timeout=4
     )
     soup = BeautifulSoup(res.text, 'html.parser')
     items = parse_akwam_cards(soup)
-
-    page_links = soup.select('ul.pagination a, a.page-link')
-    pages = [
-        p.get_text(strip=True)
-        for p in page_links
-        if p.get_text(strip=True).isdigit()
-    ]
-    max_page = max(map(int, pages)) if pages else 1
 
     return jsonify({
         'status': 'success',
         'data': {
             'type': cat_type,
-            'filters': {
-                'section': section or 'all',
-                'category': category or 'all',
-                'year': year or 'all',
-                'quality': quality or 'all',
-            },
             'current_page': int(page),
-            'total_pages': max_page,
-            'has_next_page': int(page) < max_page,
             'items_count': len(items),
             'items': items,
         },
@@ -589,7 +512,7 @@ def search():
 
   try:
     search_url = f'{TMDB_BASE_URL}/search/multi?api_key={TMDB_API_KEY}&query={quote(query)}&language=ar-SA'
-    res = requests.get(search_url, headers=TMDB_HEADERS, timeout=6).json()
+    res = requests.get(search_url, headers=TMDB_HEADERS, timeout=4).json()
 
     items = []
     for item in res.get('results', []):
@@ -631,7 +554,7 @@ def get_series_details():
   try:
     target_url = safe_url(series_url)
     res = requests.get(
-        target_url, headers=get_akwam_headers(target_url), timeout=6
+        target_url, headers=get_akwam_headers(target_url), timeout=4
     )
     soup = BeautifulSoup(res.text, 'html.parser')
 
@@ -665,53 +588,16 @@ def get_series_details():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 🎬 نقطة جلب البث المتوازية والسريعة للغاية
+# 🎬 نقطة جلب البث الاحتياطية (Fallback)
 @app.route('/api/stream', methods=['GET'])
 def get_direct_stream():
-  embed_url = request.args.get('embed_url', '')
   title = request.args.get('title', '')
   orig_title = request.args.get('original_title', '')
   media_type = request.args.get('type', 'movie').lower()
 
-  if embed_url:
-    try:
-      emb_headers = {
-          'User-Agent': TMDB_HEADERS['User-Agent'],
-          'Referer': 'https://larroza.mom/',
-      }
-      res_emb = requests.get(embed_url, headers=emb_headers, timeout=6)
-      unpacked_code = unpack_dean_edwards(res_emb.text)
-
-      m3u8_links = re.findall(
-          r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', unpacked_code
-      )
-      if m3u8_links:
-        raw_stream = m3u8_links[0]
-        h_json = json.dumps(
-            {'User-Agent': TMDB_HEADERS['User-Agent'], 'Referer': embed_url}
-        )
-        proxy_url = f'{request.host_url}hls-proxy?url={quote(raw_stream)}&headers={quote(h_json)}'
-
-        return jsonify({
-            'status': 'success',
-            'data': {
-                'title': title or 'سيرفر مشغل مضمن',
-                'type': media_type,
-                'active_domain': AKWAM_BASE_DOMAIN,
-                'streams': [{
-                    'quality': 'سيرفر HLS فائق السرعة (عبر البروكسي)',
-                    'url': proxy_url,
-                    'is_default': True,
-                }],
-            },
-        })
-    except Exception as emb_err:
-      print(f'⚠️ Embed processing exception: {emb_err}')
-
   if not title and not orig_title:
     return jsonify({'status': 'error', 'message': 'Title missing'}), 400
 
-  # التنفيذ المتوازي المباشر للبحث في أكوام ولاروزا بنفس اللحظة
   akwam_res = None
   larroza_res = None
 
@@ -724,23 +610,19 @@ def get_direct_stream():
     )
 
     try:
-      akwam_res = future_akwam.result(timeout=6)
-    except Exception as e:
-      print(f'Akwam execution timeout/error: {e}')
+      akwam_res = future_akwam.result(timeout=4)
+    except Exception:
+      pass
 
     try:
-      larroza_res = future_larroza.result(timeout=6)
-    except Exception as e:
-      print(f'Larroza execution timeout/error: {e}')
+      larroza_res = future_larroza.result(timeout=4)
+    except Exception:
+      pass
 
   combined_streams = []
   if akwam_res:
     combined_streams.extend(akwam_res)
-
   if larroza_res:
-    if combined_streams:
-      for s in larroza_res:
-        s['is_default'] = False
     combined_streams.extend(larroza_res)
 
   if combined_streams:
@@ -754,12 +636,7 @@ def get_direct_stream():
         },
     })
 
-  return (
-      jsonify(
-          {'status': 'error', 'message': 'Content not found in Akwam or Larroza'}
-      ),
-      404,
-  )
+  return jsonify({'status': 'error', 'message': 'Content not found'}), 404
 
 
 if __name__ == '__main__':
