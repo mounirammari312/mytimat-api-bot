@@ -6,8 +6,8 @@ import requests
 
 app = Flask(__name__)
 
-# --- إعدادات TMDB API ---
-TMDB_API_KEY = "15d2fd480251d4e1f31be9d76d471906"
+# --- إعدادات TMDB API (مفتاحك الشخصي المفعل والمحصن) ---
+TMDB_API_KEY = "65687d1e167bc35f38ee0c88c3a37b74"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
 TMDB_HEADERS = {
@@ -128,7 +128,9 @@ def parse_akwam_cards(soup):
   return items
 
 
-# --- نقاط الـ API المكتملة ---
+# ==========================================
+# نقاط الـ API المكتملة
+# ==========================================
 
 
 # 🟢 أ) فحص الحالة العامة للسيرفر
@@ -138,75 +140,103 @@ def index():
       'status': 'online',
       'engine': 'Akwam Direct Scraping Engine',
       'active_domain': AKWAM_BASE_DOMAIN,
-      'version': '1.4.0',
+      'version': '1.5.0',
   })
 
 
-# 🌐 ب) الشاشة الرئيسية الهجينة (دعم غلاف HD أفقي للسلايدر)
+# 🌐 ب) الشاشة الرئيسية الهجينة (محصنة وموحدة البيانات لعدم انهيار الأندرويد)
 @app.route('/api/home', methods=['GET'])
 def get_home():
   try:
     trending_movies = []
     trending_tv = []
 
+    # 1. محاولة الجلب الآمن من TMDB
     try:
       movies_url = f'{TMDB_BASE_URL}/trending/movie/week?api_key={TMDB_API_KEY}&language=ar-SA'
-      tv_url = f'{TMDB_BASE_URL}/trending/tv/week?api_key={TMDB_API_KEY}&language=ar-SA'
+      tv_url = (
+          f'{TMDB_BASE_URL}/trending/tv/week?api_key={TMDB_API_KEY}&language=ar-SA'
+      )
 
-      movies_res = requests.get(
-          movies_url, headers=TMDB_HEADERS, timeout=5
-      ).json()
-      tv_res = requests.get(tv_url, headers=TMDB_HEADERS, timeout=5).json()
+      m_res = requests.get(movies_url, headers=TMDB_HEADERS, timeout=6)
+      t_res = requests.get(tv_url, headers=TMDB_HEADERS, timeout=6)
 
-      trending_movies = [
-          {
-              'id': str(m.get('id')),
-              'title': m.get('title') or m.get('original_title'),
-              'poster': format_poster(m.get('poster_path')),
-              'backdrop': format_backdrop(
-                  m.get('backdrop_path') or m.get('poster_path')
-              ),
-              'rating': round(m.get('vote_average', 0), 1),
-              'type': 'movie',
-          }
-          for m in movies_res.get('results', [])[:10]
-          if m.get('poster_path')
-      ]
+      if m_res.status_code == 200:
+        trending_movies = [
+            {
+                'id': str(m.get('id', '')),
+                'url': '',  # حقل آمن لمنع انهيار الأندرويد
+                'title': m.get('title') or m.get('original_title', ''),
+                'poster': format_poster(m.get('poster_path')),
+                'backdrop': format_backdrop(
+                    m.get('backdrop_path') or m.get('poster_path')
+                ),
+                'rating': round(m.get('vote_average', 0), 1),
+                'type': 'movie',
+            }
+            for m in m_res.json().get('results', [])[:10]
+            if m.get('poster_path')
+        ]
 
-      trending_tv = [
-          {
-              'id': str(t.get('id')),
-              'title': t.get('name') or t.get('original_name'),
-              'poster': format_poster(t.get('poster_path')),
-              'backdrop': format_backdrop(
-                  t.get('backdrop_path') or t.get('poster_path')
-              ),
-              'rating': round(t.get('vote_average', 0), 1),
-              'type': 'tv',
-          }
-          for t in tv_res.get('results', [])[:10]
-          if t.get('poster_path')
-      ]
+      if t_res.status_code == 200:
+        trending_tv = [
+            {
+                'id': str(t.get('id', '')),
+                'url': '',  # حقل آمن لمنع انهيار الأندرويد
+                'title': t.get('name') or t.get('original_name', ''),
+                'poster': format_poster(t.get('poster_path')),
+                'backdrop': format_backdrop(
+                    t.get('backdrop_path') or t.get('poster_path')
+                ),
+                'rating': round(t.get('vote_average', 0), 1),
+                'type': 'tv',
+            }
+            for t in t_res.json().get('results', [])[:10]
+            if t.get('poster_path')
+        ]
     except Exception as tmdb_err:
-      print(f'⚠️ TMDB Fallback: {tmdb_err}')
+      print(f'⚠️ TMDB Fetch Error: {tmdb_err}')
 
+    # 2. التراجع الآمن إلى أكوام في حال عدم توفر البيانات من TMDB
     if not trending_movies:
-      res_akwam = requests.get(
+      res_m = requests.get(
           f'{AKWAM_BASE_DOMAIN}/movies',
           headers=get_akwam_headers(),
           timeout=6,
       )
-      soup = BeautifulSoup(res_akwam.text, 'html.parser')
-      trending_movies = parse_akwam_cards(soup)[:10]
+      soup_m = BeautifulSoup(res_m.text, 'html.parser')
+      trending_movies = [
+          {
+              'id': item.get('url', ''),
+              'url': item.get('url', ''),
+              'title': item.get('title', ''),
+              'poster': item.get('poster', ''),
+              'backdrop': item.get('poster', ''),
+              'rating': 0.0,
+              'type': 'movie',
+          }
+          for item in parse_akwam_cards(soup_m)[:10]
+      ]
 
     if not trending_tv:
-      res_akwam_tv = requests.get(
+      res_t = requests.get(
           f'{AKWAM_BASE_DOMAIN}/series',
           headers=get_akwam_headers(),
           timeout=6,
       )
-      soup_tv = BeautifulSoup(res_akwam_tv.text, 'html.parser')
-      trending_tv = parse_akwam_cards(soup_tv)[:10]
+      soup_t = BeautifulSoup(res_t.text, 'html.parser')
+      trending_tv = [
+          {
+              'id': item.get('url', ''),
+              'url': item.get('url', ''),
+              'title': item.get('title', ''),
+              'poster': item.get('poster', ''),
+              'backdrop': item.get('poster', ''),
+              'rating': 0.0,
+              'type': 'tv',
+          }
+          for item in parse_akwam_cards(soup_t)[:10]
+      ]
 
     return jsonify({
         'status': 'success',
