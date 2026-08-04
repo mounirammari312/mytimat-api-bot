@@ -1,524 +1,401 @@
-import html as html_module
-import re
-import requests
+from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
+import re
+import requests
 
 app = Flask(__name__)
 
-BASE_URL = "https://mycimatv.online"
-HEADERS = {
+# --- الإعدادات الثابتة والـ Headers ---
+TMDB_API_KEY = '15d2fd480251d4e1f31be9d76d471906'
+TMDB_BASE_URL = 'https://api.themoviedb.org/3'
+
+TMDB_HEADERS = {
     'User-Agent': (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        ' (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     ),
-    'Referer': f'{BASE_URL}/',
+    'Accept': 'application/json',
 }
 
 
-def normalize_text(text):
-  """توحيد النصوص العربية لمنع تكرار الأحرف والهمزات"""
-  if not text:
-    return ''
-  text = re.sub(r'[أإآ]', 'ا', text)
-  text = re.sub(r'ة', 'ه', text)
-  return text.strip().lower()
-
-
-def clean_series_title(raw_title):
-  """تنقية عنوان العمل واستخراج اسمه الأساسي"""
-  if not raw_title:
-    return ''
-  title = re.sub(
-      r'(?:الحلقة|حلقة)\s*\d+.*', '', raw_title, flags=re.IGNORECASE
-  )
-  title = re.sub(
-      r'(?:الموسم|موسم)\s*\d+.*', '', title, flags=re.IGNORECASE
-  )
-  title = re.sub(
-      r'(?:مترجم|مترجمة|مدبلج|مدبلجة|ماي سيما|HD|اون لاين|كامل).*',
-      '',
-      title,
-      flags=re.IGNORECASE,
-  )
-  title = re.sub(r'^مشاهدة\s+', '', title, flags=re.IGNORECASE)
-  return title.strip()
-
-
-def build_page_url(base_url, page):
-  """إصلاح بناء روابط الصفحات ذكياً (معالجة ? و &)"""
-  if page == 1:
-    return base_url
-  if '?' in base_url:
-    return f'{base_url}&page={page}'
-  else:
-    return f'{base_url}?page={page}'
-
-
-def unpack_js(packed_code):
-  """فك تشفير كود Packed JS المخبأ (Vidspeed / Rty1)"""
+# --- 1. الاكتشاف الديناميكي للنطاق النشط ---
+def get_active_akwam_domain():
+  """يتصل برابط التوجيه المباشر لاستخراج النطاق الفعلي النشط حالياً"""
   try:
-    pattern = (
-        r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)"
-    )
-    match = re.search(pattern, packed_code, re.DOTALL)
-    if not match:
-      return ''
-
-    payload, base_str, count_str, keywords_str = match.groups()
-    base, count, keywords = (
-        int(base_str),
-        int(count_str),
-        keywords_str.split('|'),
-    )
-
-    def encode_base(num, b):
-      chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
-      return (
-          chars[num]
-          if num < b
-          else encode_base(num // b, b) + chars[num % b]
-      )
-
-    syms = {
-        encode_base(i, base): (
-            keywords[i]
-            if i < len(keywords) and keywords[i]
-            else encode_base(i, base)
-        )
-        for i in range(count)
-    }
-    return re.sub(
-        r'\b\w+\b', lambda m: syms.get(m.group(0), m.group(0)), payload
-    )
-  except Exception:
-    return ''
-
-
-def extract_stream_from_embed(embed_url):
-  """استخراج رابط البث المباشر المطور مع التوكنات وتجاوز الحظر"""
-  try:
-    if embed_url.startswith('//'):
-      embed_url = 'https:' + embed_url
-
-    req_headers = {'User-Agent': HEADERS['User-Agent'], 'Referer': embed_url}
     res = requests.get(
-        embed_url,
-        headers={'User-Agent': HEADERS['User-Agent'], 'Referer': BASE_URL},
+        'https://ak.sv/',
+        headers=TMDB_HEADERS,
         timeout=6,
         allow_redirects=True,
     )
-    if 'File is no longer available' in res.text or res.status_code != 200:
-      return None, None
-
-    html_clean = res.text.replace('\\/', '/')
-
-    stream_matches = re.findall(
-        r'(?:https?:)?//[^\s"\'<>\\]+?\.(?:m3u8|mp4)[^\s"\'<>\\]*', html_clean
-    )
-
-    if not stream_matches and 'eval(function' in res.text:
-      unpacked = unpack_js(res.text)
-      if unpacked:
-        unpacked_clean = unpacked.replace('\\/', '/')
-        stream_matches = re.findall(
-            r'(?:https?:)?//[^\s"\'<>\\]+?\.(?:m3u8|mp4)[^\s"\'<>\\]*',
-            unpacked_clean,
-        )
-
-    if stream_matches:
-      clean_url = stream_matches[0]
-      if clean_url.startswith('//'):
-        clean_url = 'https:' + clean_url
-      return clean_url.split('&amp;')[0], req_headers
-
+    parsed = urlparse(res.url)
+    domain = f'{parsed.scheme}://{parsed.netloc}'
+    return domain
   except Exception:
-    pass
-
-  return None, None
+    return 'https://akwam.it'
 
 
-def fetch_category_items_fast(base_url, content_type='any', limit=20, page=1):
-  """جلب العناصر مع دعم الصفحة الصحيحة بالتفصيل"""
+AKWAM_BASE_DOMAIN = get_active_akwam_domain()
+
+
+def get_akwam_headers(referer_url=None):
+  return {
+      'User-Agent': (
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      ),
+      'Referer': referer_url or f'{AKWAM_BASE_DOMAIN}/',
+  }
+
+
+def format_poster(poster_path):
+  return f'https://image.tmdb.org/t/p/w500{poster_path}' if poster_path else ''
+
+
+# --- 2. محرك تشريح بطاقات الكتالوج (Card Parser Utility) ---
+def parse_akwam_cards(soup):
+  """تحليل بطاقات الكتالوج وإزالة التكرار ومعالجة التحميل الكسول للبوسترات"""
+  card_containers = soup.select(
+      'div.widget-body div.col-lg-2, div.widget-body div.col-md-3,'
+      ' div.entry-box'
+  )
   items = []
-  seen_base_titles = set()
-  page_url = build_page_url(base_url, page)
+  seen_urls = set()
 
-  try:
-    res = requests.get(page_url, headers=HEADERS, timeout=8)
-    soup = BeautifulSoup(res.text, 'html.parser')
+  for card in card_containers:
+    link_el = card.select_one('a[href*="/movie/"], a[href*="/series/"]')
+    if not link_el:
+      continue
 
-    for post in soup.select('.block-post, li:has(div.imgSer), a[href*="vid="]'):
-      a_tag = post if post.name == 'a' else post.find('a', href=True)
-      if not a_tag or 'vid=' not in a_tag.get('href', ''):
-        continue
+    href = link_el['href']
+    if not href.startswith('http'):
+      href = f"{AKWAM_BASE_DOMAIN}/{href.lstrip('/')}"
 
-      vid = a_tag['href'].split('vid=')[-1]
-      raw_title = a_tag.get('title', '').strip() or a_tag.get_text(strip=True)
+    if href in seen_urls:
+      continue
+    seen_urls.add(href)
 
-      if not raw_title or len(raw_title) < 4 or 'صفحة' in raw_title:
-        continue
+    # 1. العنوان
+    title_el = card.select_one(
+        'h3.entry-title, .entry-title, h3, a.entry-title'
+    )
+    img_el = card.select_one('img')
 
-      norm_raw = normalize_text(raw_title)
+    title = 'غير متوفر'
+    if title_el and title_el.get_text(strip=True):
+      title = title_el.get_text(strip=True)
+    elif img_el and img_el.get('alt'):
+      title = img_el['alt']
 
-      if content_type == 'series' and 'فيلم' in norm_raw:
-        continue
-      if content_type == 'movies' and (
-          'مسلسل' in norm_raw or 'حلقة' in norm_raw
-      ):
-        continue
+    # 2. البوستر (حل مشكلة Lazy Load)
+    poster_url = ''
+    if img_el:
+      poster_url = (
+          img_el.get('data-src') or img_el.get('data-lazy') or img_el.get('src')
+      )
+      if poster_url and 'placeholder.png' in poster_url:
+        poster_url = img_el.get('data-src') or poster_url
 
-      base_title = clean_series_title(raw_title)
-      norm_base = normalize_text(base_title)
+    # 3. الوسوم والجودة
+    badge_els = card.select('span.badge, div.badge, span.quality')
+    badges = [
+        b.get_text(strip=True) for b in badge_els if b.get_text(strip=True)
+    ]
 
-      if norm_base in seen_base_titles:
-        continue
+    media_type = 'series' if '/series/' in href else 'movie'
 
-      poster = ''
-      if post.name != 'a':
-        img_ser = post.find('div', class_='imgSer')
-        if img_ser and img_ser.get('style'):
-          m = re.search(r"url\(['\"]?(.*?)['\"]?\)", img_ser['style'])
-          if m:
-            poster = m.group(1)
-
-      if not poster and post.find('img'):
-        img = post.find('img')
-        poster = img.get('src') or img.get('data-src') or ''
-
-      if poster and not poster.startswith('http'):
-        poster = f"{BASE_URL}/{poster.lstrip('/')}"
-
-      seen_base_titles.add(norm_base)
-      items.append({'vid': vid, 'title': base_title, 'poster': poster})
-
-      if len(items) >= limit:
-        break
-  except Exception:
-    pass
+    items.append({
+        'title': title,
+        'url': href,
+        'poster': poster_url,
+        'tags': badges,
+        'type': media_type,
+    })
 
   return items
 
 
-# 1️⃣ الواجهة الرئيسية (/api/home)
+# --- 3. نقاط الـ API (API Routes) ---
+
+
+# 🟢 أ) نقطة فحص الصحة والوضع النشط
+@app.route('/', methods=['GET'])
+def index():
+  return jsonify({
+      'status': 'online',
+      'engine': 'Akwam Direct Scraping Engine',
+      'active_domain': AKWAM_BASE_DOMAIN,
+      'version': '1.0.0',
+  })
+
+
+# 🌐 ب) الواجهة الرئيسية (TMDB Feed)
 @app.route('/api/home', methods=['GET'])
 def get_home():
   try:
-    MAIN_CATEGORIES = [
-        (
-            'foreign_movies',
-            '🎬 أفلام أجنبية',
-            f'{BASE_URL}/category.php?cat=aflam-ajnbe111',
-            'movies',
-        ),
-        (
-            'foreign_series',
-            '📺 مسلسلات أجنبية',
-            f'{BASE_URL}/category.php?cat=mslslat-ajnbe11',
-            'series',
-        ),
-        (
-            'turkish_series',
-            '🇹🇷 مسلسلات تركية',
-            f'{BASE_URL}/category.php?cat=mslslat-trke1',
-            'series',
-        ),
-        (
-            'arabic_movies',
-            '🔥 أفلام عربية',
-            f'{BASE_URL}/category.php?cat=aflam-a',
-            'movies',
-        ),
-        (
-            'arabic_series',
-            '🌙 مسلسلات عربية',
-            f'{BASE_URL}/category.php?cat=mslslat-arbe122',
-            'series',
-        ),
+    movies_url = f'{TMDB_BASE_URL}/trending/movie/week?api_key={TMDB_API_KEY}&language=ar-SA'
+    tv_url = f'{TMDB_BASE_URL}/trending/tv/week?api_key={TMDB_API_KEY}&language=ar-SA'
+
+    movies_res = requests.get(
+        movies_url, headers=TMDB_HEADERS, timeout=8
+    ).json()
+    tv_res = requests.get(tv_url, headers=TMDB_HEADERS, timeout=8).json()
+
+    trending_movies = [
+        {
+            'id': str(m.get('id')),
+            'title': m.get('title') or m.get('original_title'),
+            'poster': format_poster(m.get('poster_path')),
+            'rating': round(m.get('vote_average', 0), 1),
+            'type': 'movie',
+        }
+        for m in movies_res.get('results', [])[:10]
     ]
 
-    sections = []
-    for key, title, url, ctype in MAIN_CATEGORIES:
-      items = fetch_category_items_fast(
-          url, content_type=ctype, limit=10, page=1
-      )
-      if items:
-        sections.append({'key': key, 'title': title, 'items': items})
+    trending_tv = [
+        {
+            'id': str(t.get('id')),
+            'title': t.get('name') or t.get('original_name'),
+            'poster': format_poster(t.get('poster_path')),
+            'rating': round(t.get('vote_average', 0), 1),
+            'type': 'tv',
+        }
+        for t in tv_res.get('results', [])[:10]
+    ]
 
-    return jsonify({'status': 'success', 'data': sections})
+    return jsonify({
+        'status': 'success',
+        'data': [
+            {
+                'key': 'trending_movies',
+                'title': '🔥 الأفلام الأكثر شهرة',
+                'items': trending_movies,
+            },
+            {
+                'key': 'trending_tv',
+                'title': '📺 المسلسلات الأكثر مشاهدة',
+                'items': trending_tv,
+            },
+        ],
+    })
   except Exception as e:
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 2️⃣ الكاتالوج والتصفح بالأقسام (/api/catalog)
+# 📂 ج) تصفح الكتالوجات مع الترقيم (Pagination)
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
-  page = int(request.args.get('page', '1'))
-  cat_slug = request.args.get('cat', 'movies').lower()
-  limit = int(request.args.get('limit', '20'))
+  cat_type = request.args.get('type', 'movies').lower()  # movies or series
+  page = request.args.get('page', '1')
 
-  if cat_slug == 'series':
-    url = f'{BASE_URL}/all-series.php'
-    ctype = 'series'
-  elif cat_slug == 'movies':
-    url = f'{BASE_URL}/index.php'
-    ctype = 'movies'
-  else:
-    url = f'{BASE_URL}/category.php?cat={cat_slug}'
-    ctype = 'series' if 'mslsl' in cat_slug or 'series' in cat_slug else 'movies'
-
-  items = fetch_category_items_fast(
-      url, content_type=ctype, limit=limit, page=page
-  )
-  return jsonify(
-      {'status': 'success', 'page': page, 'cat': cat_slug, 'data': items}
-  )
-
-
-# 3️⃣ نقطة نهاية الأقسام (/api/categories)
-@app.route('/api/categories', methods=['GET'])
-def get_all_categories():
-  try:
-    res = requests.get(BASE_URL, headers=HEADERS, timeout=6)
-    soup = BeautifulSoup(res.text, 'html.parser')
-
-    categories = []
-    seen_urls = set()
-
-    for a in soup.find_all('a', href=True):
-      href = a['href']
-      title = a.get_text(strip=True)
-
-      if 'category.php' in href or 'all-series.php' in href:
-        full_url = (
-            href
-            if href.startswith('http')
-            else f"{BASE_URL}/{href.lstrip('/')}"
-        )
-
-        if (
-            full_url not in seen_urls
-            and title
-            and len(title) > 2
-            and 'الرئيسية' not in title
-        ):
-          seen_urls.add(full_url)
-          cat_slug = href.split('cat=')[-1] if 'cat=' in href else 'series'
-          ctype = (
-              'series'
-              if ('مسلسل' in title or 'mslsl' in cat_slug)
-              else 'movies'
-          )
-
-          categories.append({
-              'id': cat_slug,
-              'title': title,
-              'url': full_url,
-              'type': ctype,
-          })
-
-    return jsonify({'status': 'success', 'data': categories})
-  except Exception as e:
-    return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
-# 4️⃣ البحث المباشر (Search)
-@app.route('/api/search', methods=['GET'])
-def search():
-  query = request.args.get('q', '')
-  if not query:
-    return jsonify({'status': 'error', 'message': 'Query missing'}), 400
-  try:
-    url = f'{BASE_URL}/search.php?keywords={query}'
-    items = fetch_category_items_fast(
-        url, content_type='any', limit=20, page=1
-    )
-    return jsonify({'status': 'success', 'data': items})
-  except Exception as e:
-    return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
-# 5️⃣ التفاصيل والحلقات المنقاة (/api/details)
-@app.route('/api/details', methods=['GET'])
-def get_details():
-  vid = request.args.get('vid', '')
-  if not vid:
-    return jsonify({'status': 'error', 'message': 'vid missing'}), 400
+  catalog_url = f'{AKWAM_BASE_DOMAIN}/{cat_type}?page={page}'
   try:
     res = requests.get(
-        f'{BASE_URL}/play.php?vid={vid}', headers=HEADERS, timeout=8
+        catalog_url, headers=get_akwam_headers(catalog_url), timeout=8
     )
     soup = BeautifulSoup(res.text, 'html.parser')
 
-    title_el = (
-        soup.select_one('h1')
-        or soup.select_one('.entry-title')
-        or soup.select_one('title')
-    )
-    title = title_el.get_text(strip=True) if title_el else ''
+    items = parse_akwam_cards(soup)
 
-    poster_el = soup.select_one('.poster img') or soup.select_one(
-        'img[src*="uploads"]'
-    )
-    poster = (
-        poster_el.get('src') or poster_el.get('data-src') if poster_el else ''
-    )
-    if poster and not poster.startswith('http'):
-      poster = f"{BASE_URL}/{poster.lstrip('/')}"
-
-    story_el = (
-        soup.select_one('.story')
-        or soup.select_one('.description')
-        or soup.select_one('.entry-content')
-    )
-    story = story_el.get_text(strip=True) if story_el else ''
-
-    episodes = []
-    seen_vids = set()
-    IGNORE_KEYWORDS = [
-        'السابقة',
-        'التالية',
-        'الرئيسية',
-        'صفحة',
-        'فيس بوك',
-        'تليجرام',
+    # استخراج أرقام الصفحات
+    page_links = soup.select('ul.pagination a, a.page-link')
+    pages = [
+        p.get_text(strip=True)
+        for p in page_links
+        if p.get_text(strip=True).isdigit()
     ]
-
-    for a in soup.find_all('a', href=True):
-      href = a['href']
-      ep_title = a.get_text(strip=True)
-
-      if ('watch.php?vid=' in href or 'play.php?vid=' in href) and ep_title:
-        ep_vid = href.split('vid=')[-1]
-        if (
-            ep_vid == vid
-            or ep_vid in seen_vids
-            or any(kw in ep_title for kw in IGNORE_KEYWORDS)
-        ):
-          continue
-
-        seen_vids.add(ep_vid)
-        episodes.append({'vid': ep_vid, 'title': ep_title})
-
-    def get_episode_number(item):
-      match = re.search(r'(?:الحلقة|حلقة)\s*(\d+)', item['title'])
-      return int(match.group(1)) if match else 9999
-
-    episodes.sort(key=get_episode_number)
+    max_page = max(map(int, pages)) if pages else 1
 
     return jsonify({
         'status': 'success',
         'data': {
-            'vid': vid,
-            'title': title,
-            'poster': poster,
-            'story': story,
-            'episodes': episodes,
+            'current_page': int(page),
+            'total_pages': max_page,
+            'items_count': len(items),
+            'items': items,
         },
     })
   except Exception as e:
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 6️⃣ البث المتعدد الشامل لكل الخوادم المتاحة (/api/stream)
-@app.route('/api/stream', methods=['GET'])
-def get_stream():
-  vid = request.args.get('vid', '')
-  if not vid:
-    return jsonify({'status': 'error', 'message': 'vid missing'}), 400
+# 🔍 د) البحث الشامل
+@app.route('/api/search', methods=['GET'])
+def search():
+  query = request.args.get('q', '')
+  if not query:
+    return jsonify({'status': 'error', 'message': 'Query missing'}), 400
 
-  play_url = f'{BASE_URL}/play.php?vid={vid}'
   try:
-    res = requests.get(play_url, headers=HEADERS, timeout=8)
-    soup = BeautifulSoup(res.text, 'html.parser')
+    search_url = f'{TMDB_BASE_URL}/search/multi?api_key={TMDB_API_KEY}&query={query}&language=ar-SA'
+    res = requests.get(search_url, headers=TMDB_HEADERS, timeout=8).json()
 
-    targets = []
-
-    for iframe in soup.select('iframe[src], iframe[data-src]'):
-      src = iframe.get('src') or iframe.get('data-src')
-      if src and 'facebook' not in src and 'google' not in src:
-        targets.append(('سيرفر رئيسي', src))
-
-    servers = soup.select(
-        'li[id*="server"], li[data-embed], .servers-list li, ul.servers li,'
-        ' [data-url], [data-embed]'
-    )
-    for srv in servers:
-      srv_name = srv.get_text(strip=True) or srv.get('id', 'سيرفر احتياطي')
-      raw_embed = ''
-      for attr in [
-          'data-embed',
-          'data-url',
-          'data-src',
-          'data-link',
-          'href',
-          'src',
-      ]:
-        val = srv.get(attr, '')
-        if val:
-          raw_embed = val
-          break
-
-      if not raw_embed:
-        ifr = srv.find('iframe')
-        if ifr and ifr.get('src'):
-          raw_embed = ifr.get('src')
-
-      if raw_embed:
-        raw_embed = html_module.unescape(str(raw_embed))
-        match_src = re.search(
-            r'(?:src|href)=["\']([^"\']+)["\']', raw_embed, re.IGNORECASE
-        )
-        embed_url = (
-            match_src.group(1)
-            if match_src
-            else (
-                re.search(r'(?:https?:)?//[^\s"\'<>]+', raw_embed).group(0)
-                if re.search(r'(?:https?:)?//[^\s"\'<>]+', raw_embed)
-                else ''
-            )
-        )
-        if embed_url:
-          targets.append((srv_name, embed_url))
-
-    working_servers = []
-    seen_urls = set()
-
-    for s_name, embed_url in targets:
-      if not embed_url or (
-          not embed_url.startswith('http') and not embed_url.startswith('//')
-      ):
-        continue
-
-      embed_url = embed_url.rstrip('"\'>;')
-      stream_url, req_headers = extract_stream_from_embed(embed_url)
-
-      if stream_url and stream_url not in seen_urls:
-        seen_urls.add(stream_url)
-        working_servers.append({
-            'id': len(working_servers) + 1,
-            'name': s_name,
-            'stream_url': stream_url,
-            'headers': req_headers,
+    items = []
+    for item in res.get('results', []):
+      m_type = item.get('media_type')
+      if m_type in ['movie', 'tv']:
+        items.append({
+            'id': str(item.get('id')),
+            'title': (
+                item.get('title')
+                or item.get('name')
+                or item.get('original_title')
+            ),
+            'poster': format_poster(item.get('poster_path')),
+            'rating': round(item.get('vote_average', 0), 1),
+            'type': m_type,
         })
 
-    if working_servers:
-      return jsonify({
-          'status': 'success',
-          'data': {
-              'servers': working_servers,
-              'stream_url': working_servers[0]['stream_url'],
-              'headers': working_servers[0]['headers'],
-          },
-      })
+    return jsonify({'status': 'success', 'data': items})
+  except Exception as e:
+    return jsonify({'status': 'error', 'message': str(e)}), 500
 
-    return jsonify(
-        {'status': 'error', 'message': 'No working stream servers found'}
-    ), 404
+
+# 🌀 هـ) تفكيك شجرة المسلسل (المواسم والحلقات)
+@app.route('/api/series-details', methods=['GET'])
+def get_series_details():
+  series_url = request.args.get('url', '')
+  if not series_url:
+    return jsonify({'status': 'error', 'message': 'Series URL missing'}), 400
+
+  try:
+    res = requests.get(
+        series_url, headers=get_akwam_headers(series_url), timeout=8
+    )
+    soup = BeautifulSoup(res.text, 'html.parser')
+
+    # المواسم
+    season_links = soup.select('a[href*="/series/"]')
+    seasons = []
+    seen_seasons = set()
+    for s in season_links:
+      s_href = s['href']
+      if not s_href.startswith('http'):
+        s_href = f"{AKWAM_BASE_DOMAIN}/{s_href.lstrip('/')}"
+      if s_href not in seen_seasons and s_href != series_url:
+        seen_seasons.add(s_href)
+        seasons.append({'title': s.get_text(strip=True) or 'موسم', 'url': s_href})
+
+    # الحلقات
+    episode_cards = soup.select('a[href*="/episode/"]')
+    episodes = []
+    seen_episodes = set()
+    for ep in episode_cards:
+      ep_href = ep['href']
+      if not ep_href.startswith('http'):
+        ep_href = f"{AKWAM_BASE_DOMAIN}/{ep_href.lstrip('/')}"
+      if ep_href not in seen_episodes:
+        seen_episodes.add(ep_href)
+        episodes.append({'title': ep.get_text(strip=True), 'url': ep_href})
+
+    return jsonify({
+        'status': 'success',
+        'data': {'seasons': seasons, 'episodes': episodes},
+    })
+  except Exception as e:
+    return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# 🎬 و) اقتناص روابط البث المباشرة (.mp4)
+@app.route('/api/stream', methods=['GET'])
+def get_direct_stream():
+  title = request.args.get('title', '')
+  media_type = request.args.get('type', 'movie').lower()
+
+  if not title:
+    return jsonify({'status': 'error', 'message': 'Title missing'}), 400
+
+  try:
+    search_url = f'{AKWAM_BASE_DOMAIN}/search?q={title}'
+    search_res = requests.get(
+        search_url, headers=get_akwam_headers(), timeout=8
+    )
+    soup = BeautifulSoup(search_res.text, 'html.parser')
+
+    selector = (
+        'a[href*="/movie/"]' if media_type == 'movie' else 'a[href*="/series/"]'
+    )
+    card = soup.select_one(selector)
+
+    if not card or not card.get('href'):
+      return (
+          jsonify(
+              {'status': 'error', 'message': 'Content not found in engine'}
+          ),
+          404,
+      )
+
+    item_url = card['href']
+    if not item_url.startswith('http'):
+      item_url = f"{AKWAM_BASE_DOMAIN}/{item_url.lstrip('/')}"
+
+    target_url = item_url
+    if media_type == 'tv':
+      series_res = requests.get(
+          item_url, headers=get_akwam_headers(item_url), timeout=8
+      )
+      soup_s = BeautifulSoup(series_res.text, 'html.parser')
+      ep_card = soup_s.select_one('a[href*="/episode/"]')
+      if ep_card and ep_card.get('href'):
+        target_url = ep_card['href']
+        if not target_url.startswith('http'):
+          target_url = f"{AKWAM_BASE_DOMAIN}/{target_url.lstrip('/')}"
+
+    res_target = requests.get(
+        target_url, headers=get_akwam_headers(target_url), timeout=8
+    )
+    soup_t = BeautifulSoup(res_target.text, 'html.parser')
+    watch_btn = soup_t.select_one('a[href*="/watch/"], a.link-btn')
+
+    if not watch_btn or not watch_btn.get('href'):
+      return (
+          jsonify(
+              {'status': 'error', 'message': 'Watch page link unavailable'}
+          ),
+          404,
+      )
+
+    watch_url = watch_btn['href']
+    if not watch_url.startswith('http'):
+      watch_url = f"{AKWAM_BASE_DOMAIN}/{watch_url.lstrip('/')}"
+
+    res_w = requests.get(
+        watch_url, headers=get_akwam_headers(watch_url), timeout=8
+    )
+    raw_links = re.findall(
+        r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*', res_w.text
+    )
+
+    unique_links = []
+    for link in raw_links:
+      if link not in unique_links and '#Intent;' not in link:
+        unique_links.append(link)
+
+    qualities = []
+    for idx, u in enumerate(unique_links):
+      if '1080' in u:
+        q_label = '1080p FHD'
+      elif '720' in u:
+        q_label = '720p HD'
+      elif '480' in u:
+        q_label = '480p SD'
+      else:
+        q_label = f'سيرفر مباشر {idx+1}'
+
+      qualities.append({'quality': q_label, 'url': u, 'is_default': idx == 0})
+
+    return jsonify({
+        'status': 'success',
+        'data': {
+            'title': title,
+            'type': media_type,
+            'active_domain': AKWAM_BASE_DOMAIN,
+            'streams': qualities,
+        },
+    })
   except Exception as e:
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 if __name__ == '__main__':
-  app.run(debug=True)
+  app.run(host='0.0.0.0', port=5000, debug=True)
 
