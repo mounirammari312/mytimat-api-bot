@@ -1,11 +1,12 @@
+import json
 import re
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
 from bs4 import BeautifulSoup
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 import requests
 
 # ==============================================================================
-# إعدادات التطبيق والسيرفر الرئيسي
+# إعدادات التطبيق والسيرفر الرئيسي (Vercel Serverless Entrypoint)
 # ==============================================================================
 
 app = Flask(__name__)
@@ -25,8 +26,39 @@ TMDB_HEADERS = {
 
 
 # ==============================================================================
-# 1. الدوال المساعدة والأمان للروابط والدومينات (Dynamic Domain Resolvers)
+# 1. الدوال المساعدة والأمان للروابط والدومينات وتفكيك التشفير
 # ==============================================================================
+
+DIGITS = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+
+
+def base_encode(num, base):
+  """تحويل الأرقام إلى قواعد نصية لفك تشفير Dean Edwards."""
+  if num == 0:
+    return DIGITS[0]
+  res = []
+  while num > 0:
+    res.append(DIGITS[num % base])
+    num //= base
+  return ''.join(reversed(res))
+
+
+def unpack_dean_edwards(script_text):
+  """فك تشفير أكواد eval(function(p,a,c,k,e,d)...) لسيرفرات okhd و Vidmoly."""
+  pattern = r"eval\(function\(p,a,c,k,e,d\)\{.*?\}\s*\(\s*'(.*?)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'(.*?)'\.split\('\|'\)"
+  match = re.search(pattern, script_text, re.DOTALL)
+  if not match:
+    return script_text
+
+  p, a_str, c_str, k_str = match.groups()
+  a, c = int(a_str), int(c_str)
+  k = k_str.split('|')
+
+  for i in range(c - 1, -1, -1):
+    symbol = base_encode(i, a)
+    if i < len(k) and k[i]:
+      p = re.sub(r'\b' + re.escape(symbol) + r'\b', k[i], p)
+  return p
 
 
 def safe_url(url):
@@ -59,27 +91,8 @@ def get_active_akwam_domain():
     return 'https://akwam.it'
 
 
-def get_active_arabseed_domain():
-  """الاكتشاف الديناميكي لنطاق موقع عرب سيد النشط حالياً."""
-  domains = [
-      'https://arabseed.store',
-      'https://arabseed.show',
-      'https://arabseed.net',
-      'https://arabseed.site',
-  ]
-  for domain in domains:
-    try:
-      res = requests.get(domain, headers=TMDB_HEADERS, timeout=4)
-      if res.status_code == 200:
-        return domain
-    except Exception:
-      continue
-  return 'https://arabseed.store'
-
-
-# تحديد النطاقات النشطة عند بدء التشغيل
+# تحديد النطاق النشط عند بدء التشغيل
 AKWAM_BASE_DOMAIN = get_active_akwam_domain()
-ARABSEED_BASE_DOMAIN = get_active_arabseed_domain()
 
 
 def get_akwam_headers(referer_url=None):
@@ -183,182 +196,7 @@ def parse_akwam_cards(soup):
 
 
 # ==============================================================================
-# 4. دوال كشط واقتناص السيرفرات والبث المباشر (Multi-Providers)
-# ==============================================================================
-
-
-def fetch_akwam_stream(title, orig_title, media_type):
-  """المزود الأول: اقتناص روابط MP4 من أكوام."""
-  search_queries = [q for q in [title, orig_title] if q]
-  card = None
-
-  try:
-    for q in search_queries:
-      search_url = safe_url(f'{AKWAM_BASE_DOMAIN}/search?q={q}')
-      search_res = requests.get(
-          search_url, headers=get_akwam_headers(), timeout=8
-      )
-      soup = BeautifulSoup(search_res.text, 'html.parser')
-
-      selector = (
-          'a[href*="/movie/"]'
-          if media_type == 'movie'
-          else 'a[href*="/series/"]'
-      )
-      card = soup.select_one(selector)
-      if card and card.get('href'):
-        break
-
-    if not card or not card.get('href'):
-      return None
-
-    item_url = card['href']
-    if not item_url.startswith('http'):
-      item_url = f"{AKWAM_BASE_DOMAIN}/{item_url.lstrip('/')}"
-
-    target_url = item_url
-    if media_type == 'tv':
-      series_res = requests.get(
-          safe_url(item_url),
-          headers=get_akwam_headers(item_url),
-          timeout=8,
-      )
-      soup_s = BeautifulSoup(series_res.text, 'html.parser')
-      ep_card = soup_s.select_one('a[href*="/episode/"]')
-      if ep_card and ep_card.get('href'):
-        target_url = ep_card['href']
-        if not target_url.startswith('http'):
-          target_url = f"{AKWAM_BASE_DOMAIN}/{target_url.lstrip('/')}"
-
-    target_url = safe_url(target_url)
-    res_target = requests.get(
-        target_url, headers=get_akwam_headers(target_url), timeout=8
-    )
-    soup_t = BeautifulSoup(res_target.text, 'html.parser')
-    watch_btn = soup_t.select_one('a[href*="/watch/"], a.link-btn')
-
-    if not watch_btn or not watch_btn.get('href'):
-      return None
-
-    watch_url = watch_btn['href']
-    if not watch_url.startswith('http'):
-      watch_url = f"{AKWAM_BASE_DOMAIN}/{watch_url.lstrip('/')}"
-
-    watch_url = safe_url(watch_url)
-    res_w = requests.get(
-        watch_url, headers=get_akwam_headers(watch_url), timeout=8
-    )
-    raw_links = re.findall(
-        r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*', res_w.text
-    )
-
-    unique_links = []
-    for link in raw_links:
-      if link not in unique_links and '#Intent;' not in link:
-        unique_links.append(link)
-
-    qualities = []
-    for idx, u in enumerate(unique_links):
-      if '1080' in u:
-        q_label = '1080p FHD (أكوام)'
-      elif '720' in u:
-        q_label = '720p HD (أكوام)'
-      elif '480' in u:
-        q_label = '480p SD (أكوام)'
-      else:
-        q_label = f'أكوام مباشر {idx+1}'
-
-      qualities.append({'quality': q_label, 'url': u, 'is_default': idx == 0})
-
-    return qualities if qualities else None
-  except Exception as e:
-    print(f'⚠️ Akwam Fetch Error: {e}')
-    return None
-
-
-def fetch_arabseed_stream(title, orig_title):
-  """المزود الثاني الاحتياطي: اقتناص روابط MP4 من عرب سيد."""
-  search_queries = [q for q in [title, orig_title] if q]
-  forbidden = [
-      '/main',
-      '/recently',
-      '/trend',
-      '/orders',
-      '/privacy-policy',
-      '/dmca',
-      '/movies',
-      '/series',
-      '/category',
-      '/find',
-      '/section',
-      '/tag',
-      '/year',
-      '/login',
-      '/register',
-  ]
-  target_link = None
-
-  for q in search_queries:
-    try:
-      s_url = f'{ARABSEED_BASE_DOMAIN}/find/?find={quote(q)}'
-      res = requests.get(s_url, headers=TMDB_HEADERS, timeout=8)
-      soup = BeautifulSoup(res.text, 'html.parser')
-
-      for a in soup.find_all('a', href=True):
-        href = a['href']
-        if not href.startswith('http'):
-          href = f"{ARABSEED_BASE_DOMAIN}/{href.lstrip('/')}"
-
-        is_forbidden = any(f in href.lower() for f in forbidden)
-        if not is_forbidden and href != f'{ARABSEED_BASE_DOMAIN}/':
-          if '%' in href or '/film/' in href or '/movie/' in href:
-            target_link = href
-            break
-      if target_link:
-        break
-    except Exception:
-      continue
-
-  if not target_link:
-    return None
-
-  try:
-    clean_base = target_link.rstrip('/')
-    if clean_base.endswith('/watch'):
-      clean_base = clean_base[:-6]
-    dl_url = f'{clean_base}/download/'
-
-    res_dl = requests.get(dl_url, headers=TMDB_HEADERS, timeout=8)
-    raw_mp4 = re.findall(
-        r'https?://[^\s"\'<>]+\.(?:mp4|m3u8)[^\s"\'<>]*', res_dl.text
-    )
-
-    unique_mp4 = []
-    for link in raw_mp4:
-      if link not in unique_mp4 and '#Intent;' not in link:
-        unique_mp4.append(link)
-
-    qualities = []
-    for idx, u in enumerate(unique_mp4):
-      if '1080' in u:
-        q_label = '1080p FHD (عرب سيد)'
-      elif '720' in u:
-        q_label = '720p HD (عرب سيد)'
-      elif '480' in u:
-        q_label = '480p SD (عرب سيد)'
-      else:
-        q_label = f'عرب سيد مباشر {idx+1}'
-
-      qualities.append({'quality': q_label, 'url': u, 'is_default': idx == 0})
-
-    return qualities if qualities else None
-  except Exception as e:
-    print(f'⚠️ Arabseed Fetch Error: {e}')
-    return None
-
-
-# ==============================================================================
-# 5. مسارات ونقاط الـ API الكلية للتطبيق (Flask Routes - مكتملة بدون حذف)
+# 4. مسارات ونقاط الـ API الكلية للتطبيق (Flask Routes)
 # ==============================================================================
 
 
@@ -367,14 +205,71 @@ def fetch_arabseed_stream(title, orig_title):
 def index():
   return jsonify({
       'status': 'online',
-      'engine': 'Hybrid Multi-Provider Scraping Engine (Akwam + Arabseed)',
-      'akwam_domain': AKWAM_BASE_DOMAIN,
-      'arabseed_domain': ARABSEED_BASE_DOMAIN,
+      'engine': 'Akwam + Local HLS Proxy Engine',
+      'active_domain': AKWAM_BASE_DOMAIN,
       'version': '2.0.0',
   })
 
 
-# 🌐 ب) الشاشة الرئيسية الهجينة (TMDB + Fallback Akwam)
+# 🚀 ب) مسار خادم البروكسي المحلي لتمرير الترويسات ومنع حظر HTTP 403 في ExoPlayer
+@app.route('/hls-proxy', methods=['GET'])
+def hls_proxy():
+  target_url = request.args.get('url')
+  headers_raw = request.args.get('headers', '{}')
+
+  if not target_url:
+    return 'Missing URL', 400
+
+  target_url = unquote(target_url)
+  try:
+    headers_dict = json.loads(unquote(headers_raw))
+  except Exception:
+    headers_dict = {}
+
+  try:
+    resp = requests.get(
+        target_url, headers=headers_dict, stream=True, timeout=12
+    )
+    content_type = resp.headers.get('Content-Type', '')
+
+    # 1. إذا كان الملف المطلوب هو قائمة التشغيل (.m3u8)
+    if '.m3u8' in target_url.lower() or 'mpegurl' in content_type.lower():
+      playlist_text = resp.text
+      rewritten_lines = []
+
+      for line in playlist_text.splitlines():
+        line_str = line.strip()
+        if line_str and not line_str.startswith('#'):
+          segment_abs_url = urljoin(target_url, line_str)
+          proxied_segment_url = f'/hls-proxy?url={quote(segment_abs_url)}&headers={quote(headers_raw)}'
+          rewritten_lines.append(proxied_segment_url)
+        else:
+          rewritten_lines.append(line)
+
+      return Response(
+          '\n'.join(rewritten_lines),
+          status=resp.status_code,
+          content_type='application/vnd.apple.mpegurl',
+      )
+    else:
+      # 2. إذا كان المطلوب هو قطعة فيديو ثنائية (.ts)
+
+      def stream_gen():
+        for chunk in resp.iter_content(chunk_size=64 * 1024):
+          if chunk:
+            yield chunk
+
+      return Response(
+          stream_gen(),
+          status=resp.status_code,
+          content_type=content_type or 'video/mp2t',
+      )
+
+  except Exception as e:
+    return f'Proxy Error: {str(e)}', 500
+
+
+# 🌐 ج) الشاشة الرئيسية الهجينة (TMDB + Fallback Akwam)
 @app.route('/api/home', methods=['GET'])
 def get_home():
   try:
@@ -493,7 +388,7 @@ def get_home():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 📂 ج) نقطة الكتالوج الشاملة (لزر "عرض الكل" والترقيم والفلترة)
+# 📂 د) نقطة الكتالوج الشاملة (لزر "عرض الكل" والترقيم والفلترة)
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
   cat_type = request.args.get('type', 'movies').lower()
@@ -553,7 +448,7 @@ def get_catalog():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 🔍 د) البحث المباشر في TMDB
+# 🔍 هـ) البحث المباشر في TMDB
 @app.route('/api/search', methods=['GET'])
 def search():
   query = request.args.get('q', '')
@@ -595,7 +490,7 @@ def search():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 🌀 هـ) تفاصيل المسلسل (المواسم والحلقات من أكوام)
+# 🌀 و) تفاصيل المسلسل (المواسم والحلقات من أكوام)
 @app.route('/api/series-details', methods=['GET'])
 def get_series_details():
   series_url = request.args.get('url', '')
@@ -639,43 +534,167 @@ def get_series_details():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 🎬 و) اقتناص روابط البث المباشرة (.mp4) عبر التجميع الهجين (أكوام -> عرب سيد)
+# 🎬 ز) اقتناص روابط البث المباشرة (.mp4 من أكوام OR سيرفرات HLS المشفرة عبر البروكسي)
 @app.route('/api/stream', methods=['GET'])
 def get_direct_stream():
+  embed_url = request.args.get('embed_url', '')
   title = request.args.get('title', '')
   orig_title = request.args.get('original_title', '')
   media_type = request.args.get('type', 'movie').lower()
 
+  # 1. إذا تم تمرير رابط سيرفر مشغل مضمن (مثل okhd.site أو Vidmoly)
+  if embed_url:
+    try:
+      emb_headers = {
+          'User-Agent': TMDB_HEADERS['User-Agent'],
+          'Referer': 'https://larroza.mom/',
+      }
+      res_emb = requests.get(embed_url, headers=emb_headers, timeout=8)
+
+      # فك تشفير Dean Edwards تلقائياً
+      unpacked_code = unpack_dean_edwards(res_emb.text)
+
+      m3u8_links = re.findall(
+          r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', unpacked_code
+      )
+      if m3u8_links:
+        raw_stream = m3u8_links[0]
+        h_json = json.dumps(
+            {'User-Agent': TMDB_HEADERS['User-Agent'], 'Referer': embed_url}
+        )
+
+        # تحويل الرابط إلى رابط بروكسي محلي شغال 100%
+        proxy_url = f'{request.host_url}hls-proxy?url={quote(raw_stream)}&headers={quote(h_json)}'
+
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'title': title or 'سيرفر مشغل مضمن',
+                'type': media_type,
+                'active_domain': AKWAM_BASE_DOMAIN,
+                'streams': [{
+                    'quality': 'سيرفر HLS فائق السرعة (عبر البروكسي)',
+                    'url': proxy_url,
+                    'is_default': True,
+                }],
+            },
+        })
+    except Exception as emb_err:
+      print(f'⚠️ Embed processing exception: {emb_err}')
+
+  # 2. في حالة عدم وجود embed_url، يتم تنفيذ كشط موقع أكوام الأصلي بالكامل
   if not title and not orig_title:
     return jsonify({'status': 'error', 'message': 'Title missing'}), 400
 
-  # 1. المحاولة الأولى: كشط موقع أكوام
-  streams = fetch_akwam_stream(title, orig_title, media_type)
+  # قائمة المصطلحات للبحث بها لمنع خطأ 404
+  search_queries = [q for q in [title, orig_title] if q]
 
-  # 2. المحاولة الثانية التلقائية: كشط موقع عرب سيد إذا فشل أكوام
-  if not streams:
-    print(
-        f"🔄 انتقال تلقائي للمزود الثاني (عرب سيد) للفيلم: {title or orig_title}"
+  try:
+    card = None
+    for q in search_queries:
+      search_url = safe_url(f'{AKWAM_BASE_DOMAIN}/search?q={q}')
+      search_res = requests.get(
+          search_url, headers=get_akwam_headers(), timeout=8
+      )
+      soup = BeautifulSoup(search_res.text, 'html.parser')
+
+      selector = (
+          'a[href*="/movie/"]'
+          if media_type == 'movie'
+          else 'a[href*="/series/"]'
+      )
+      card = soup.select_one(selector)
+      if card and card.get('href'):
+        break  # تم العثور على العنصر في أكوام بنجاح
+
+    if not card or not card.get('href'):
+      return (
+          jsonify(
+              {'status': 'error', 'message': 'Content not found in engine'}
+          ),
+          404,
+      )
+
+    item_url = card['href']
+    if not item_url.startswith('http'):
+      item_url = f"{AKWAM_BASE_DOMAIN}/{item_url.lstrip('/')}"
+
+    target_url = item_url
+    if media_type == 'tv':
+      series_res = requests.get(
+          safe_url(item_url),
+          headers=get_akwam_headers(item_url),
+          timeout=8,
+      )
+      soup_s = BeautifulSoup(series_res.text, 'html.parser')
+      ep_card = soup_s.select_one('a[href*="/episode/"]')
+      if ep_card and ep_card.get('href'):
+        target_url = ep_card['href']
+        if not target_url.startswith('http'):
+          target_url = f"{AKWAM_BASE_DOMAIN}/{target_url.lstrip('/')}"
+
+    target_url = safe_url(target_url)
+    res_target = requests.get(
+        target_url, headers=get_akwam_headers(target_url), timeout=8
     )
-    streams = fetch_arabseed_stream(title, orig_title)
+    soup_t = BeautifulSoup(res_target.text, 'html.parser')
+    watch_btn = soup_t.select_one('a[href*="/watch/"], a.link-btn')
 
-  if streams:
+    if not watch_btn or not watch_btn.get('href'):
+      return (
+          jsonify(
+              {'status': 'error', 'message': 'Watch page link unavailable'}
+          ),
+          404,
+      )
+
+    watch_url = watch_btn['href']
+    if not watch_url.startswith('http'):
+      watch_url = f"{AKWAM_BASE_DOMAIN}/{watch_url.lstrip('/')}"
+
+    watch_url = safe_url(watch_url)
+    res_w = requests.get(
+        watch_url, headers=get_akwam_headers(watch_url), timeout=8
+    )
+
+    # استخراج روابط mp4 عبر النماذج التعبيرية (Regex)
+    raw_links = re.findall(
+        r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*', res_w.text
+    )
+
+    unique_links = []
+    for link in raw_links:
+      if link not in unique_links and '#Intent;' not in link:
+        unique_links.append(link)
+
+    qualities = []
+    for idx, u in enumerate(unique_links):
+      if '1080' in u:
+        q_label = '1080p FHD'
+      elif '720' in u:
+        q_label = '720p HD'
+      elif '480' in u:
+        q_label = '480p SD'
+      else:
+        q_label = f'سيرفر مباشر {idx+1}'
+
+      qualities.append({'quality': q_label, 'url': u, 'is_default': idx == 0})
+
     return jsonify({
         'status': 'success',
-        'data': {'title': title, 'type': media_type, 'streams': streams},
+        'data': {
+            'title': title,
+            'type': media_type,
+            'active_domain': AKWAM_BASE_DOMAIN,
+            'streams': qualities,
+        },
     })
-
-  return (
-      jsonify({
-          'status': 'error',
-          'message': 'Content not found in any available engine',
-      }),
-      404,
-  )
+  except Exception as e:
+    return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 # ==============================================================================
-# نقطة تشغيل السيرفر المحلية (Development Mode)
+# نقطة تشغيل السيرفر المحلية (Development / Local Testing)
 # ==============================================================================
 
 if __name__ == '__main__':
