@@ -1,28 +1,30 @@
 import re
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
 import requests
 
 app = Flask(__name__)
 
-# --- إعدادات TMDB API ---
 TMDB_API_KEY = "15d2fd480251d4e1f31be9d76d471906"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
-# ترويسة خاصة بطلبات TMDB (مستقلة لمنع الرفض)
 TMDB_HEADERS = {
     'User-Agent': (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        ' (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     ),
     'Accept': 'application/json',
 }
 
 
-# --- 1. الاكتشاف الديناميكي لنطاق أكوام النشط ---
+def safe_url(url):
+  """تحويل الروابط التي تحتوي على حروف عربية إلى ترميز ASCII آمن"""
+  if not url:
+    return url
+  return quote(url, safe=':/?&=#%')
+
+
 def get_active_akwam_domain():
-  """يتصل برابط التوجيه المباشر لاستخراج النطاق الفعلي النشط حالياً"""
   try:
     res = requests.get(
         'https://ak.sv/',
@@ -31,8 +33,7 @@ def get_active_akwam_domain():
         allow_redirects=True,
     )
     parsed = urlparse(res.url)
-    domain = f'{parsed.scheme}://{parsed.netloc}'
-    return domain
+    return f'{parsed.scheme}://{parsed.netloc}'
   except Exception:
     return 'https://akwam.it'
 
@@ -41,13 +42,12 @@ AKWAM_BASE_DOMAIN = get_active_akwam_domain()
 
 
 def get_akwam_headers(referer_url=None):
-  """توليد ترويسة مخصصة لموقع أكوام لضمان تجاوز الحظر"""
+  ref = safe_url(referer_url) if referer_url else f'{AKWAM_BASE_DOMAIN}/'
   return {
       'User-Agent': (
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-          ' (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
       ),
-      'Referer': referer_url or f'{AKWAM_BASE_DOMAIN}/',
+      'Referer': ref,
   }
 
 
@@ -55,9 +55,7 @@ def format_poster(poster_path):
   return f'https://image.tmdb.org/t/p/w500{poster_path}' if poster_path else ''
 
 
-# --- 2. محرك تشريح وتصفية بطاقات الكتالوج ---
 def parse_akwam_cards(soup):
-  """تحليل بطاقات الكتالوج وإزالة التكرار ومعالجة البوسترات والجودات"""
   card_containers = soup.select(
       'div.widget-body div.col-lg-2, div.widget-body div.col-md-3,'
       ' div.entry-box'
@@ -78,7 +76,6 @@ def parse_akwam_cards(soup):
       continue
     seen_urls.add(href)
 
-    # استخراج العنوان
     title_el = card.select_one(
         'h3.entry-title, .entry-title, h3, a.entry-title'
     )
@@ -90,7 +87,6 @@ def parse_akwam_cards(soup):
     elif img_el and img_el.get('alt'):
       title = img_el['alt']
 
-    # استخراج البوستر (حل مشكلة Lazy Load)
     poster_url = ''
     if img_el:
       poster_url = (
@@ -99,12 +95,10 @@ def parse_akwam_cards(soup):
       if poster_url and 'placeholder.png' in poster_url:
         poster_url = img_el.get('data-src') or poster_url
 
-    # استخراج الوسوم والجودة
     badge_els = card.select('span.badge, div.badge, span.quality')
     badges = [
         b.get_text(strip=True) for b in badge_els if b.get_text(strip=True)
     ]
-
     media_type = 'series' if '/series/' in href else 'movie'
 
     items.append({
@@ -118,28 +112,22 @@ def parse_akwam_cards(soup):
   return items
 
 
-# --- 3. نقاط الـ API الموحدة ---
-
-
-# 🟢 أ) نقطة فحص الصحة والوضع النشط
 @app.route('/', methods=['GET'])
 def index():
   return jsonify({
       'status': 'online',
       'engine': 'Akwam Direct Scraping Engine',
       'active_domain': AKWAM_BASE_DOMAIN,
-      'version': '1.2.0',
+      'version': '1.3.0',
   })
 
 
-# 🌐 ب) الواجهة الرئيسية الهجينة (TMDB + Fallback)
 @app.route('/api/home', methods=['GET'])
 def get_home():
   try:
     trending_movies = []
     trending_tv = []
 
-    # 1. محاولة الجلب من TMDB أولاً
     try:
       movies_url = f'{TMDB_BASE_URL}/trending/movie/week?api_key={TMDB_API_KEY}&language=ar-SA'
       tv_url = f'{TMDB_BASE_URL}/trending/tv/week?api_key={TMDB_API_KEY}&language=ar-SA'
@@ -175,7 +163,6 @@ def get_home():
     except Exception as tmdb_err:
       print(f'⚠️ TMDB Fallback: {tmdb_err}')
 
-    # 2. خطة الاحتياط: إذا كانت القائمة فارغة يتم الجلب من الكتالوج المباشر
     if not trending_movies:
       res_akwam = requests.get(
           f'{AKWAM_BASE_DOMAIN}/movies',
@@ -200,15 +187,11 @@ def get_home():
             {
                 'key': 'trending_movies',
                 'title': '🔥 الأفلام الأكثر شهرة',
-                'has_see_all': True,
-                'see_all_params': {'type': 'movies', 'page': 1},
                 'items': trending_movies,
             },
             {
                 'key': 'trending_tv',
                 'title': '📺 المسلسلات الأكثر مشاهدة',
-                'has_see_all': True,
-                'see_all_params': {'type': 'series', 'page': 1},
                 'items': trending_tv,
             },
         ],
@@ -217,20 +200,17 @@ def get_home():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 📂 ج) نقطة الكتالوج الشاملة (لزر "عرض الكل" والتصفح اللانهائي والفلترة)
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
-  cat_type = request.args.get('type', 'movies').lower()  # movies or series
+  cat_type = request.args.get('type', 'movies').lower()
   page = request.args.get('page', '1')
 
-  # معاملات الفلترة
   section = request.args.get('section', '')
   category = request.args.get('category', '')
   year = request.args.get('year', '')
   quality = request.args.get('quality', '')
 
   query_params = [f'page={page}']
-
   if section:
     query_params.append(f'section={section}')
   if category:
@@ -241,17 +221,15 @@ def get_catalog():
     query_params.append(f'quality={quality}')
 
   query_string = '&'.join(query_params)
-  catalog_url = f'{AKWAM_BASE_DOMAIN}/{cat_type}?{query_string}'
+  catalog_url = safe_url(f'{AKWAM_BASE_DOMAIN}/{cat_type}?{query_string}')
 
   try:
     res = requests.get(
         catalog_url, headers=get_akwam_headers(catalog_url), timeout=8
     )
     soup = BeautifulSoup(res.text, 'html.parser')
-
     items = parse_akwam_cards(soup)
 
-    # استخرج أرقام الصفحات
     page_links = soup.select('ul.pagination a, a.page-link')
     pages = [
         p.get_text(strip=True)
@@ -264,15 +242,8 @@ def get_catalog():
         'status': 'success',
         'data': {
             'type': cat_type,
-            'filters': {
-                'section': section or 'all',
-                'category': category or 'all',
-                'year': year or 'all',
-                'quality': quality or 'all',
-            },
             'current_page': int(page),
             'total_pages': max_page,
-            'has_next_page': int(page) < max_page,
             'items_count': len(items),
             'items': items,
         },
@@ -281,39 +252,7 @@ def get_catalog():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 🔍 د) البحث الشامل عبر TMDB
-@app.route('/api/search', methods=['GET'])
-def search():
-  query = request.args.get('q', '')
-  if not query:
-    return jsonify({'status': 'error', 'message': 'Query missing'}), 400
-
-  try:
-    search_url = f'{TMDB_BASE_URL}/search/multi?api_key={TMDB_API_KEY}&query={query}&language=ar-SA'
-    res = requests.get(search_url, headers=TMDB_HEADERS, timeout=8).json()
-
-    items = []
-    for item in res.get('results', []):
-      m_type = item.get('media_type')
-      if m_type in ['movie', 'tv']:
-        items.append({
-            'id': str(item.get('id')),
-            'title': (
-                item.get('title')
-                or item.get('name')
-                or item.get('original_title')
-            ),
-            'poster': format_poster(item.get('poster_path')),
-            'rating': round(item.get('vote_average', 0), 1),
-            'type': m_type,
-        })
-
-    return jsonify({'status': 'success', 'data': items})
-  except Exception as e:
-    return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
-# 🌀 هـ) تفكيك شجرة المسلسل (المواسم والحلقات)
+# 🌀 تفاصيل المسلسل مع دعم المعالجة الآمنة للروابط العربية
 @app.route('/api/series-details', methods=['GET'])
 def get_series_details():
   series_url = request.args.get('url', '')
@@ -321,12 +260,12 @@ def get_series_details():
     return jsonify({'status': 'error', 'message': 'Series URL missing'}), 400
 
   try:
+    target_url = safe_url(series_url)
     res = requests.get(
-        series_url, headers=get_akwam_headers(series_url), timeout=8
+        target_url, headers=get_akwam_headers(target_url), timeout=8
     )
     soup = BeautifulSoup(res.text, 'html.parser')
 
-    # المواسم
     season_links = soup.select('a[href*="/series/"]')
     seasons = []
     seen_seasons = set()
@@ -338,7 +277,6 @@ def get_series_details():
         seen_seasons.add(s_href)
         seasons.append({'title': s.get_text(strip=True) or 'موسم', 'url': s_href})
 
-    # الحلقات
     episode_cards = soup.select('a[href*="/episode/"]')
     episodes = []
     seen_episodes = set()
@@ -358,7 +296,7 @@ def get_series_details():
     return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 🎬 و) نقطة اقتناص روابط البث المباشرة (.mp4)
+# 🎬 اقتناص روابط البث مع دعم الحروف العربية
 @app.route('/api/stream', methods=['GET'])
 def get_direct_stream():
   title = request.args.get('title', '')
@@ -368,7 +306,7 @@ def get_direct_stream():
     return jsonify({'status': 'error', 'message': 'Title missing'}), 400
 
   try:
-    search_url = f'{AKWAM_BASE_DOMAIN}/search?q={title}'
+    search_url = safe_url(f'{AKWAM_BASE_DOMAIN}/search?q={title}')
     search_res = requests.get(
         search_url, headers=get_akwam_headers(), timeout=8
     )
@@ -394,7 +332,9 @@ def get_direct_stream():
     target_url = item_url
     if media_type == 'tv':
       series_res = requests.get(
-          item_url, headers=get_akwam_headers(item_url), timeout=8
+          safe_url(item_url),
+          headers=get_akwam_headers(item_url),
+          timeout=8,
       )
       soup_s = BeautifulSoup(series_res.text, 'html.parser')
       ep_card = soup_s.select_one('a[href*="/episode/"]')
@@ -403,6 +343,7 @@ def get_direct_stream():
         if not target_url.startswith('http'):
           target_url = f"{AKWAM_BASE_DOMAIN}/{target_url.lstrip('/')}"
 
+    target_url = safe_url(target_url)
     res_target = requests.get(
         target_url, headers=get_akwam_headers(target_url), timeout=8
     )
@@ -421,6 +362,7 @@ def get_direct_stream():
     if not watch_url.startswith('http'):
       watch_url = f"{AKWAM_BASE_DOMAIN}/{watch_url.lstrip('/')}"
 
+    watch_url = safe_url(watch_url)
     res_w = requests.get(
         watch_url, headers=get_akwam_headers(watch_url), timeout=8
     )
