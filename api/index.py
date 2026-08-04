@@ -5,6 +5,28 @@ from bs4 import BeautifulSoup
 from flask import Flask, Response, jsonify, request
 import requests
 
+
+
+import os
+import sys
+
+# إضافة المجلد الرئيسي للمشروع إلى مسارات بايثون لمنع أخطاء Import Error في Vercel
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# الآن تأتي استدعاءات الملفات كما هي
+from core.unpacker import unpack_dean_edwards
+from scrapers.akwam import (
+    AKWAM_BASE_DOMAIN,
+    fetch_akwam_stream,
+    format_backdrop,
+    format_poster,
+    get_akwam_headers,
+    parse_akwam_cards,
+    safe_url,
+)
+from scrapers.larroza import LARROZA_BASE_DOMAIN, fetch_larroza_stream
+
+
 # استدعاء المحركات والوحدات المستقلة
 from core.unpacker import unpack_dean_edwards
 from scrapers.akwam import (
