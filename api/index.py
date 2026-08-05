@@ -1,6 +1,6 @@
-from urllib.parse import quote, unquote, urljoin, urlparse
+from urllib.parse import quote, unquote, urlparse
 from bs4 import BeautifulSoup
-from flask import Flask, Response, jsonify, request
+from flask import Flask, jsonify, request
 import requests
 
 # ==============================================================================
@@ -148,7 +148,7 @@ def index():
           'akwam': AKWAM_BASE_DOMAIN,
           'larroza': LARROZA_BASE_DOMAIN,
       },
-      'version': '6.1.0',
+      'version': '6.2.0',
   })
 
 
@@ -157,7 +157,7 @@ def get_config():
   """تزويد التطبيق بجميع المواقع وقواعد الكشط الديناميكية لتحديث GenericScraper"""
   return jsonify({
       'status': 'success',
-      'version': '6.1.0',
+      'version': '6.2.0',
       'providers': [
           {
               'name': 'akwam',
@@ -181,61 +181,6 @@ def get_config():
           },
       ],
   })
-
-
-@app.route('/hls-proxy', methods=['GET'])
-def hls_proxy():
-  """بروكسي وسيط اختياري لإعادة تشغيل مسارات HLS عند الحاجة"""
-  target_url = request.args.get('url')
-  headers_raw = request.args.get('headers', '{}')
-
-  if not target_url:
-    return 'Missing URL', 400
-
-  target_url = unquote(target_url)
-  try:
-    headers_dict = json.loads(unquote(headers_raw))
-  except Exception:
-    headers_dict = {}
-
-  try:
-    resp = requests.get(
-        target_url, headers=headers_dict, stream=True, timeout=8
-    )
-    content_type = resp.headers.get('Content-Type', '')
-
-    if '.m3u8' in target_url.lower() or 'mpegurl' in content_type.lower():
-      playlist_text = resp.text
-      rewritten_lines = []
-
-      for line in playlist_text.splitlines():
-        line_str = line.strip()
-        if line_str and not line_str.startswith('#'):
-          segment_abs_url = urljoin(target_url, line_str)
-          proxied_segment_url = f'/hls-proxy?url={quote(segment_abs_url)}&headers={quote(headers_raw)}'
-          rewritten_lines.append(proxied_segment_url)
-        else:
-          rewritten_lines.append(line)
-
-      return Response(
-          '\n'.join(rewritten_lines),
-          status=resp.status_code,
-          content_type='application/vnd.apple.mpegurl',
-      )
-    else:
-
-      def stream_gen():
-        for chunk in resp.iter_content(chunk_size=64 * 1024):
-          if chunk:
-            yield chunk
-
-      return Response(
-          stream_gen(),
-          status=resp.status_code,
-          content_type=content_type or 'video/mp2t',
-      )
-  except Exception as e:
-    return f'Proxy Error: {str(e)}', 500
 
 
 @app.route('/api/home', methods=['GET'])
