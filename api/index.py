@@ -163,8 +163,7 @@ def get_config():
     return jsonify({
         'status': 'success',
         'version': '6.3.0',
-        'providers': [ 
-            
+        'providers': [
             {
                 'name': 'akwam',
                 'domain': AKWAM_BASE_DOMAIN,
@@ -176,21 +175,6 @@ def get_config():
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
                 'requires_unpack': False,
             },
-            
-{
-   
-    "name": "elcinema",
-    "domain": "https://elcinema.com",
-    "search_path": "/?s={query}",
-    "card_selector": "a[href*=\"فيلم\"], a[href*=\"مسلسل\"], a[href*=\"/watch/\"]",
-    "watch_selector": "iframe, [data-link], [data-url], [data-post]",
-    "link_regex": "https?://[^\\s\"'<>]+\\.(?:m3u8|mp4)[^\\s\"'<>]*",
-    "requires_unpack": True,
-    "ajax_required": True
-
-
-},
-
             {
                 'name': 'larroza',
                 'domain': LARROZA_BASE_DOMAIN,
