@@ -174,7 +174,7 @@ def get_config():
     'link_regex': r'https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*',
     'requires_unpack': True,
     'ajax_required': True
-}
+},
 
 
 
