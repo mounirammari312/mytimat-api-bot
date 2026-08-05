@@ -179,6 +179,28 @@ def get_config():
               'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
               'requires_unpack': True,
           },
+                           
+        {
+  "name": "moviz-time",
+  "domain": "https://moviz-time.site",
+  "search_path": "/?s={query}",
+  "card_selector": "a[href*=\"فيلم\"], a[href*=\"مسلسل\"], a[href*=\"/watch/\"]",
+  "watch_selector": "iframe, [data-link], [data-url], [data-post]",
+  "link_regex": "https?://[^\\s\"\\'<>]+\\.(?:m3u8|mp4)[^\\s\"\\'<>]*",
+  "requires_unpack": true,
+  "ajax_required": true
+},
+
+
+                
+
+
+
+
+
+
+
+          
       ],
   })
 
