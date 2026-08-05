@@ -384,44 +384,65 @@ def get_catalog():
 
 @app.route('/api/search', methods=['GET'])
 def search():
-  """البحث في TMDB بالأسماء العربية والإنجليزي"""
+  """البحث في TMDB بالأسماء العربية والإنجليزية مع حماية كاملة ضد الانهيار"""
   query = request.args.get('q', '')
   if not query:
     return jsonify({'status': 'error', 'message': 'Query missing'}), 400
 
   try:
     search_url = f'{TMDB_BASE_URL}/search/multi?api_key={TMDB_API_KEY}&query={quote(query)}&language=ar-SA'
-    res = requests.get(search_url, headers=TMDB_HEADERS, timeout=4).json()
+    
+    # رفع المهلة إلى 8 ثوانٍ لتجنب الانقطاع مع الإنترنت الضعيف
+    res = requests.get(search_url, headers=TMDB_HEADERS, timeout=8)
+    
+    # إذا لم تكن الاستجابة ناجحة، نُرجع قائمة فارغة بدلاً من انهيار التطبيق
+    if res.status_code != 200:
+      return jsonify({'status': 'success', 'data': []})
 
+    res_json = res.json()
     items = []
-    for item in res.get('results', []):
+    
+    for item in res_json.get('results', []):
       m_type = item.get('media_type')
       if m_type in ['movie', 'tv']:
+        # حماية تقييم الفيلم من القيم الفارغة لمنع أخطاء الـ Type
+        vote_avg = item.get('vote_average')
+        rating = round(vote_avg, 1) if isinstance(vote_avg, (int, float)) else 0.0
+
+        title = item.get('title') or item.get('name') or item.get('original_title') or 'بدون عنوان'
+        orig_title = item.get('original_name') or item.get('original_title') or ''
+        poster_path = item.get('poster_path')
+
+        # تجهيز الروابط لكل المواقع المتاحة لتفادي الارتباط بموقع واحد فقط
+        sources = {
+            'akwam': f"{AKWAM_BASE_DOMAIN}/search?q={quote(title)}",
+            'larroza': f"{LARROZA_BASE_DOMAIN}/search.php?keywords={quote(title)}",
+            'moviz-time': f"https://moviz-time.site/?s={quote(title)}"
+        }
+
         items.append({
-            'id': str(item.get('id')),
-            'url': (
-                f"{AKWAM_BASE_DOMAIN}/search?q={quote(item.get('title') or item.get('name') or '')}"
-            ),
-            'title': (
-                item.get('title')
-                or item.get('name')
-                or item.get('original_title')
-            ),
-            'original_title': item.get('original_title')
-            or item.get('original_name')
-            or '',
-            'poster': format_poster(item.get('poster_path')),
-            'backdrop': format_backdrop(
-                item.get('backdrop_path') or item.get('poster_path')
-            ),
-            'rating': round(item.get('vote_average', 0), 1),
+            'id': str(item.get('id', '')),
+            'url': sources['akwam'],  # الرابط الافتراضي للتوافق مع التطبيق
+            'sources': sources,       # روابط إضافية لكل المواقع
+            'title': title,
+            'original_title': orig_title,
+            'poster': format_poster(poster_path),
+            'backdrop': format_backdrop(item.get('backdrop_path') or poster_path),
+            'rating': rating,
             'tags': ['TMDB'],
             'type': m_type,
         })
 
     return jsonify({'status': 'success', 'data': items})
+    
   except Exception as e:
-    return jsonify({'status': 'error', 'message': str(e)}), 500
+    print(f"⚠️ Search Error: {e}")
+    # الحماية القصوى: إرجاع قائمة فارغة بكود 200 لمنع Force Close في تطبيق الأندرويد
+    return jsonify({'status': 'success', 'data': []})
+
+
+
+
 
 
 @app.route('/api/series-details', methods=['GET'])
