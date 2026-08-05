@@ -457,46 +457,115 @@ def search():
 
 @app.route('/api/series-details', methods=['GET'])
 def get_series_details():
-  """جلب تفاصيل مواسم وحلقات المسلسلات"""
+  """جلب تفاصيل المسلسل وحلقات الموسم المحدد بديناميكية تامة"""
   series_url = request.args.get('url', '')
-  if not series_url:
-    return jsonify({'status': 'error', 'message': 'Series URL missing'}), 400
+  tmdb_id = request.args.get('id', '')
+  title = request.args.get('title', '')
+  orig_title = request.args.get('original_title', '')
+  selected_season = request.args.get(
+      'season', '1'
+  )  # رقم الموسم المطلوب (الافتراضي 1)
 
-  try:
-    target_url = safe_url(series_url)
-    res = requests.get(
-        target_url, headers=get_akwam_headers(target_url), timeout=4
-    )
-    soup = BeautifulSoup(res.text, 'html.parser')
+  # 1️⃣ إذا كان المسلسل قادماً من رابط مباشر في الكتالوج (أكوام)
+  if series_url and series_url.startswith('http') and '/search' not in series_url:
+    try:
+      target_url = safe_url(series_url)
+      res = requests.get(
+          target_url, headers=get_akwam_headers(target_url), timeout=4
+      )
+      soup = BeautifulSoup(res.text, 'html.parser')
 
-    season_links = soup.select('a[href*="/series/"]')
-    seasons = []
-    seen_seasons = set()
-    for s in season_links:
-      s_href = s['href']
-      if not s_href.startswith('http'):
-        s_href = f"{AKWAM_BASE_DOMAIN}/{s_href.lstrip('/')}"
-      if s_href not in seen_seasons and s_href != series_url:
-        seen_seasons.add(s_href)
-        seasons.append({'title': s.get_text(strip=True) or 'موسم', 'url': s_href})
+      season_links = soup.select('a[href*="/series/"]')
+      seasons = []
+      seen_seasons = set()
+      for s in season_links:
+        s_href = s['href']
+        if not s_href.startswith('http'):
+          s_href = f"{AKWAM_BASE_DOMAIN}/{s_href.lstrip('/')}"
+        if s_href not in seen_seasons and s_href != series_url:
+          seen_seasons.add(s_href)
+          seasons.append(
+              {'title': s.get_text(strip=True) or 'موسم', 'url': s_href}
+          )
 
-    episode_cards = soup.select('a[href*="/episode/"]')
-    episodes = []
-    seen_episodes = set()
-    for ep in episode_cards:
-      ep_href = ep['href']
-      if not ep_href.startswith('http'):
-        ep_href = f"{AKWAM_BASE_DOMAIN}/{ep_href.lstrip('/')}"
-      if ep_href not in seen_episodes:
-        seen_episodes.add(ep_href)
-        episodes.append({'title': ep.get_text(strip=True), 'url': ep_href})
+      episode_cards = soup.select('a[href*="/episode/"]')
+      episodes = []
+      seen_episodes = set()
+      for ep in episode_cards:
+        ep_href = ep['href']
+        if not ep_href.startswith('http'):
+          ep_href = f"{AKWAM_BASE_DOMAIN}/{ep_href.lstrip('/')}"
+        if ep_href not in seen_episodes:
+          seen_episodes.add(ep_href)
+          episodes.append({'title': ep.get_text(strip=True), 'url': ep_href})
 
-    return jsonify({
-        'status': 'success',
-        'data': {'seasons': seasons, 'episodes': episodes},
-    })
-  except Exception as e:
-    return jsonify({'status': 'error', 'message': str(e)}), 500
+      return jsonify({
+          'status': 'success',
+          'data': {'seasons': seasons, 'episodes': episodes},
+      })
+    except Exception as e:
+      print(f'⚠️ Akwam Direct Series Error: {e}')
+
+  # 2️⃣ إذا كان المسلسل من TMDB: جلب حلقات الموسم المختار تحديداً
+  if tmdb_id:
+    try:
+      # جلب قائمة جميع المواسم أولاً
+      tmdb_url = f'{TMDB_BASE_URL}/tv/{tmdb_id}?api_key={TMDB_API_KEY}&language=ar-SA'
+      res_tv = requests.get(tmdb_url, headers=TMDB_HEADERS, timeout=4).json()
+
+      seasons = []
+      for s in res_tv.get('seasons', []):
+        s_num = s.get('season_number', 0)
+        if s_num > 0:
+          seasons.append({
+              'season_number': s_num,
+              'title': s.get('name') or f'الموسم {s_num}',
+              'episode_count': s.get('episode_count', 0),
+          })
+
+      # تحويل الموسم المطلوب إلى رقم صحسح
+      season_num = int(selected_season) if selected_season.isdigit() else 1
+
+      # جلب حلقات الموسم المختار حصراً
+      ep_url = f'{TMDB_BASE_URL}/tv/{tmdb_id}/season/{season_num}?api_key={TMDB_API_KEY}&language=ar-SA'
+      res_ep = requests.get(ep_url, headers=TMDB_HEADERS, timeout=4).json()
+
+      episodes = []
+      for ep in res_ep.get('episodes', []):
+        ep_num = ep.get('episode_number')
+        episodes.append({
+            'episode_number': ep_num,
+            'title': f'الحلقة {ep_num} - {ep.get("name", "")}',
+            'search_title': f'{title} الموسم {season_num} الحلقة {ep_num}',
+            'search_orig_title': f'{orig_title} S{season_num:02d}E{ep_num:02d}',
+        })
+
+      return jsonify({
+          'status': 'success',
+          'data': {
+              'current_season': season_num,
+              'seasons': seasons,
+              'episodes': episodes,
+          },
+      })
+    except Exception as tmdb_err:
+      print(f'⚠️ TMDB Series Season Switch Error: {tmdb_err}')
+
+  return (
+      jsonify(
+          {'status': 'error', 'message': 'تعذر جلب الحلقات لهذا الموسم'}
+      ),
+      404,
+  )
+
+
+
+
+        
+
+
+
+
 
 
 if __name__ == '__main__':
