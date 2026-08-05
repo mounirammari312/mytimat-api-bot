@@ -166,14 +166,17 @@ def get_config():
         'providers': [ 
             
 {
-    'name': 'elcinema',
-    'domain': 'https://elcinema.com',
-    'search_path': '/?s={query}',
-    'card_selector': 'a[href*="فيلم"], a[href*="مسلسل"], a[href*="/watch/"]',
-    'watch_selector': 'iframe, [data-link], [data-url], [data-post]',
-    'link_regex': r'https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*',
-    'requires_unpack': True,
-    'ajax_required': True
+   
+    "name": "elcinema",
+    "domain": "https://elcinema.com",
+    "search_path": "/?s={query}",
+    "card_selector": "a[href*=\"فيلم\"], a[href*=\"مسلسل\"], a[href*=\"/watch/\"]",
+    "watch_selector": "iframe, [data-link], [data-url], [data-post]",
+    "link_regex": "https?://[^\\s\"'<>]+\\.(?:m3u8|mp4)[^\\s\"'<>]*",
+    "requires_unpack": true,
+    "ajax_required": true
+
+
 },
 
 
