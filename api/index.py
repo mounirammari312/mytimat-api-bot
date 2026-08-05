@@ -1,6 +1,6 @@
-from urllib.parse import quote, unquote, urljoin, urlparse
+from urllib.parse import quote, unquote, urlparse
 from bs4 import BeautifulSoup
-from flask import Flask, Response, jsonify, request
+from flask import Flask, jsonify, request
 import requests
 
 # ==============================================================================
@@ -148,7 +148,7 @@ def index():
           'akwam': AKWAM_BASE_DOMAIN,
           'larroza': LARROZA_BASE_DOMAIN,
       },
-      'version': '6.1.0',
+      'version': '6.2.0',
   })
 
 
@@ -157,7 +157,7 @@ def get_config():
   """تزويد التطبيق بجميع المواقع وقواعد الكشط الديناميكية لتحديث GenericScraper"""
   return jsonify({
       'status': 'success',
-      'version': '6.1.0',
+      'version': '6.2.0',
       'providers': [
           {
               'name': 'akwam',
@@ -179,63 +179,32 @@ def get_config():
               'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
               'requires_unpack': True,
           },
+
+
+
+         {
+              'name': 'moviz-time',
+              'domain': 'https://moviz-time.site',
+              'search_path': '/?s={query}',
+              'card_selector': (
+                  'a[href*="فيلم"], a[href*="مسلسل"], a[href*="/watch/"]'
+              ),
+              'watch_selector': 'iframe, [data-link], [data-url], [data-post]',
+              'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+              'requires_unpack': True,   # 👈 احرص أن تكون الحروف الأولى كبيراً True
+              'ajax_required': True,     # 👈 احرص أن تكون الحروف الأولى كبيراً True
+          },
+    
+
+
+
+
+
+
+
+          
       ],
   })
-
-
-@app.route('/hls-proxy', methods=['GET'])
-def hls_proxy():
-  """بروكسي وسيط اختياري لإعادة تشغيل مسارات HLS عند الحاجة"""
-  target_url = request.args.get('url')
-  headers_raw = request.args.get('headers', '{}')
-
-  if not target_url:
-    return 'Missing URL', 400
-
-  target_url = unquote(target_url)
-  try:
-    headers_dict = json.loads(unquote(headers_raw))
-  except Exception:
-    headers_dict = {}
-
-  try:
-    resp = requests.get(
-        target_url, headers=headers_dict, stream=True, timeout=8
-    )
-    content_type = resp.headers.get('Content-Type', '')
-
-    if '.m3u8' in target_url.lower() or 'mpegurl' in content_type.lower():
-      playlist_text = resp.text
-      rewritten_lines = []
-
-      for line in playlist_text.splitlines():
-        line_str = line.strip()
-        if line_str and not line_str.startswith('#'):
-          segment_abs_url = urljoin(target_url, line_str)
-          proxied_segment_url = f'/hls-proxy?url={quote(segment_abs_url)}&headers={quote(headers_raw)}'
-          rewritten_lines.append(proxied_segment_url)
-        else:
-          rewritten_lines.append(line)
-
-      return Response(
-          '\n'.join(rewritten_lines),
-          status=resp.status_code,
-          content_type='application/vnd.apple.mpegurl',
-      )
-    else:
-
-      def stream_gen():
-        for chunk in resp.iter_content(chunk_size=64 * 1024):
-          if chunk:
-            yield chunk
-
-      return Response(
-          stream_gen(),
-          status=resp.status_code,
-          content_type=content_type or 'video/mp2t',
-      )
-  except Exception as e:
-    return f'Proxy Error: {str(e)}', 500
 
 
 @app.route('/api/home', methods=['GET'])
@@ -415,44 +384,65 @@ def get_catalog():
 
 @app.route('/api/search', methods=['GET'])
 def search():
-  """البحث في TMDB بالأسماء العربية والإنجليزي"""
+  """البحث في TMDB بالأسماء العربية والإنجليزية مع حماية كاملة ضد الانهيار"""
   query = request.args.get('q', '')
   if not query:
     return jsonify({'status': 'error', 'message': 'Query missing'}), 400
 
   try:
     search_url = f'{TMDB_BASE_URL}/search/multi?api_key={TMDB_API_KEY}&query={quote(query)}&language=ar-SA'
-    res = requests.get(search_url, headers=TMDB_HEADERS, timeout=4).json()
+    
+    # رفع المهلة إلى 8 ثوانٍ لتجنب الانقطاع مع الإنترنت الضعيف
+    res = requests.get(search_url, headers=TMDB_HEADERS, timeout=8)
+    
+    # إذا لم تكن الاستجابة ناجحة، نُرجع قائمة فارغة بدلاً من انهيار التطبيق
+    if res.status_code != 200:
+      return jsonify({'status': 'success', 'data': []})
 
+    res_json = res.json()
     items = []
-    for item in res.get('results', []):
+    
+    for item in res_json.get('results', []):
       m_type = item.get('media_type')
       if m_type in ['movie', 'tv']:
+        # حماية تقييم الفيلم من القيم الفارغة لمنع أخطاء الـ Type
+        vote_avg = item.get('vote_average')
+        rating = round(vote_avg, 1) if isinstance(vote_avg, (int, float)) else 0.0
+
+        title = item.get('title') or item.get('name') or item.get('original_title') or 'بدون عنوان'
+        orig_title = item.get('original_name') or item.get('original_title') or ''
+        poster_path = item.get('poster_path')
+
+        # تجهيز الروابط لكل المواقع المتاحة لتفادي الارتباط بموقع واحد فقط
+        sources = {
+            'akwam': f"{AKWAM_BASE_DOMAIN}/search?q={quote(title)}",
+            'larroza': f"{LARROZA_BASE_DOMAIN}/search.php?keywords={quote(title)}",
+            'moviz-time': f"https://moviz-time.site/?s={quote(title)}"
+        }
+
         items.append({
-            'id': str(item.get('id')),
-            'url': (
-                f"{AKWAM_BASE_DOMAIN}/search?q={quote(item.get('title') or item.get('name') or '')}"
-            ),
-            'title': (
-                item.get('title')
-                or item.get('name')
-                or item.get('original_title')
-            ),
-            'original_title': item.get('original_title')
-            or item.get('original_name')
-            or '',
-            'poster': format_poster(item.get('poster_path')),
-            'backdrop': format_backdrop(
-                item.get('backdrop_path') or item.get('poster_path')
-            ),
-            'rating': round(item.get('vote_average', 0), 1),
+            'id': str(item.get('id', '')),
+            'url': sources['akwam'],  # الرابط الافتراضي للتوافق مع التطبيق
+            'sources': sources,       # روابط إضافية لكل المواقع
+            'title': title,
+            'original_title': orig_title,
+            'poster': format_poster(poster_path),
+            'backdrop': format_backdrop(item.get('backdrop_path') or poster_path),
+            'rating': rating,
             'tags': ['TMDB'],
             'type': m_type,
         })
 
     return jsonify({'status': 'success', 'data': items})
+    
   except Exception as e:
-    return jsonify({'status': 'error', 'message': str(e)}), 500
+    print(f"⚠️ Search Error: {e}")
+    # الحماية القصوى: إرجاع قائمة فارغة بكود 200 لمنع Force Close في تطبيق الأندرويد
+    return jsonify({'status': 'success', 'data': []})
+
+
+
+
 
 
 @app.route('/api/series-details', methods=['GET'])
