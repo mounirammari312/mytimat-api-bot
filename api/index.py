@@ -167,15 +167,6 @@ def get_config():
         'providers': [
          
             {
-                'name': 'larroza',
-                'domain': LARROZA_BASE_DOMAIN,
-                'search_path': '/search.php?keywords={query}',
-                'card_selector': 'a[href*=video.php]',
-                'iframe_selector': 'iframe',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-                'requires_unpack': True,
-            },
-            {
                 'name': 'moviz-time',
                 'domain': 'https://moviz-time.site',
                 'search_path': '/?s={query}',
