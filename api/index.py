@@ -1,3 +1,4 @@
+
 from urllib.parse import quote, unquote, urlparse
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
@@ -164,6 +165,7 @@ def get_config():
         'status': 'success',
         'version': '6.3.0',
         'providers': [
+         
             {
                 'name': 'larroza',
                 'domain': LARROZA_BASE_DOMAIN,
@@ -609,165 +611,7 @@ def get_series_details():
 
 
 # ==============================================================================
-# 5. مسار استخراج روابط البث (Stream) — احتياطي سحابي للتطبيق
-# ==============================================================================
 
-# نمط استخراج روابط MP4 و M3U8 من HTML
-STREAM_REGEX = re.compile(
-    r'https?://[^\s"\'<>]+\.(?:mp4|m3u8|txt)[^\s"\'<>]*',
-    re.IGNORECASE,
-)
-
-
-def _scrape_akwam_streams(title, original_title, is_tv):
-    """كشط روابط البث من موقع أكوام كاحتياطي سحابي."""
-    search_term = original_title or title
-    if not search_term:
-        return []
-
-    try:
-        search_url = f'{AKWAM_BASE_DOMAIN}/search?q={quote(search_term)}'
-        res = requests.get(search_url, headers=get_akwam_headers(), timeout=5)
-        if res.status_code != 200:
-            return []
-
-        soup = BeautifulSoup(res.text, 'html.parser')
-        # البحث عن بطاقة الفيلم أو المسلسل
-        link_selector = 'a[href*="/series/"]' if is_tv else 'a[href*="/movie/"]'
-        card = soup.select_one(link_selector)
-        if not card:
-            # محاولة بأي بطاقة فيلم/مسلسل
-            card = soup.select_one('a[href*="/movie/"], a[href*="/series/"]')
-        if not card or not card.get('href'):
-            return []
-
-        item_url = card['href']
-        if not item_url.startswith('http'):
-            item_url = f"{AKWAM_BASE_DOMAIN}/{item_url.lstrip('/')}"
-
-        # للمسلسلات: نبحث عن أول حلقة
-        if is_tv:
-            res_item = requests.get(
-                safe_url(item_url), headers=get_akwam_headers(item_url), timeout=5
-            )
-            if res_item.status_code == 200:
-                soup_item = BeautifulSoup(res_item.text, 'html.parser')
-                ep_link = soup_item.select_one('a[href*="/episode/"]')
-                if ep_link and ep_link.get('href'):
-                    ep_url = ep_link['href']
-                    if not ep_url.startswith('http'):
-                        ep_url = f"{AKWAM_BASE_DOMAIN}/{ep_url.lstrip('/')}"
-                    item_url = ep_url
-
-        # فتح صفحة المشاهدة
-        res_item = requests.get(
-            safe_url(item_url), headers=get_akwam_headers(item_url), timeout=5
-        )
-        if res_item.status_code != 200:
-            return []
-
-        soup_item = BeautifulSoup(res_item.text, 'html.parser')
-        watch_link = soup_item.select_one('a[href*="/watch/"], a.link-btn')
-        watch_url = item_url
-        if watch_link and watch_link.get('href'):
-            watch_url = watch_link['href']
-            if not watch_url.startswith('http'):
-                watch_url = f"{AKWAM_BASE_DOMAIN}/{watch_url.lstrip('/')}"
-
-        res_watch = requests.get(
-            safe_url(watch_url), headers=get_akwam_headers(watch_url), timeout=5
-        )
-        if res_watch.status_code != 200:
-            return []
-
-        # استخراج روابط MP4/M3U8 من صفحة المشاهدة
-        html = res_watch.text
-        matches = STREAM_REGEX.findall(html)
-        # تنقية الروابط من أكواد HTML
-        seen = set()
-        streams = []
-        for raw in matches:
-            url = raw.replace('\\/', '/').replace('&amp;', '&').strip()
-            url = url.rstrip('\\\'"),;]')
-            if url in seen:
-                continue
-            # تجاهل روابط الإعلانات
-            low = url.lower()
-            if any(b in low for b in ['doubleclick', 'googlesyndication', 'facebook', 'twitter']):
-                continue
-            seen.add(url)
-
-            # تحديد الجودة من الرابط
-            quality = 'Auto'
-            if '1080' in low:
-                quality = '1080p FHD'
-            elif '720' in low:
-                quality = '720p HD'
-            elif '480' in low:
-                quality = '480p SD'
-            elif '.m3u8' in low:
-                quality = 'HLS'
-
-            streams.append({
-                'quality': quality,
-                'url': url,
-                'is_default': len(streams) == 0,
-            })
-
-        return streams
-    except Exception as e:
-        print(f'⚠️ Akwam Stream Scrape Error: {e}')
-        return []
-
-
-@app.route('/api/stream', methods=['GET'])
-def get_stream():
-    """احتياطي سحابي لاستخراج روابط البث من أكوام عندما يفشل الكشط المحلي في التطبيق.
-
-    التطبيق يعتمد أولاً على GenericScraper محلياً، وهذا المسار يُستخدم فقط
-    كاحتياطي عند فشل الكشط المحلي (مثلاً بسبب تغير DOM في أكوام).
-    """
-    title = request.args.get('title', '').strip()
-    stream_type = request.args.get('type', 'movie').lower().strip()
-
-    if not title:
-        return jsonify({
-            'status': 'success',
-            'data': {'streams': [], 'title': '', 'type': stream_type},
-        })
-
-    is_tv = stream_type in ('tv', 'series')
-    streams = _scrape_akwam_streams(title, title, is_tv)
-
-    # محاولة ثانية بالعنوان الأصلي إذا فشلت الأولى (للأفلام الأجنبية)
-    if not streams:
-        try:
-            # البحث في TMDB عن العنوان الأصلي
-            tmdb_search = f'{TMDB_BASE_URL}/search/multi?api_key={TMDB_API_KEY}&query={quote(title)}&language=en-US'
-            res = requests.get(tmdb_search, headers=TMDB_HEADERS, timeout=4)
-            if res.status_code == 200:
-                for item in res.json().get('results', []):
-                    if item.get('media_type') in ('movie', 'tv'):
-                        orig = item.get('original_title') or item.get('original_name')
-                        if orig and orig.lower() != title.lower():
-                            streams = _scrape_akwam_streams(orig, orig, is_tv)
-                            if streams:
-                                break
-        except Exception as e:
-            print(f'⚠️ TMDB Original Title Fallback Error: {e}')
-
-    return jsonify({
-        'status': 'success',
-        'data': {
-            'streams': streams,
-            'title': title,
-            'type': stream_type,
-            'active_domain': AKWAM_BASE_DOMAIN,
-        },
-    })
-
-
-# ==============================================================================
 # 6. مسار تفاصيل الفيلم (Movie Details) — يعتمد على TMDB
 # ==============================================================================
 
@@ -847,4 +691,3 @@ def get_movie_details():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
-
