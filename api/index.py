@@ -165,29 +165,25 @@ def get_config():
         'version': '6.3.0',
                 'providers': [
             {
-                'name': 'elcinema',
-                'domain': 'https://elcinema.com',
-                'search_path': '/?s={query}',
-                'card_selector': 'a[href*="فيلم"], a[href*="مسلسل"], a[href*="/watch/"]',
-                'watch_selector': 'iframe, [data-link], [data-url], [data-post]',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-                'requires_unpack': True,
-                'ajax_required': True,
-            },
-            
-            {
-                'name': 'moviz-time',
-                'domain': 'https://moviz-time.site',
+                            
+                'name': 'qfilm',
+                'domain': 'https://a.qfilm.tv',
                 'search_path': '/?s={query}',
                 'card_selector': (
-                    'a[href*="/watch/"], a[href*="/series/"], article.post a'
+                    'a[href*="/watch/"], a[href*="/play.php"], a[href*="vid="'
+                    ')'
                 ),
-                'watch_selector': 'iframe, [data-link], [data-url], [data-post]',
-                'iframe_selector': 'iframe, iframe[data-src]',
+                'watch_selector': (
+                    'iframe, [data-link], [data-url], [data-post],'
+                    ' a[href*="watch.php"], a[href*="play.php"]'
+                ),
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'requires_unpack': True,
-                'ajax_required': True,
+                'ajax_required': False,
+            
+
             },
+            
         ],
     })
 
