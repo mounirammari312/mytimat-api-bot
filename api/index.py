@@ -61,17 +61,6 @@ def get_akwam_headers(referer_url=None):
 def get_providers_config():
     return [
         {
-            'name': 'akwam',
-            'domain': AKWAM_BASE_DOMAIN,
-            'search_path': '/search?q={query}',
-            'movie_selector': 'a[href*=/movie/]',
-            'series_selector': 'a[href*=/series/]',
-            'ep_selector': 'a[href*=/episode/]',
-            'watch_selector': 'a[href*=/watch/], a.link-btn',
-            'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
-            'requires_unpack': False,
-        },
-        {
             'name': 'larroza',
             'domain': LARROZA_BASE_DOMAIN,
             'search_path': '/search.php?keywords={query}',
