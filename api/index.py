@@ -167,7 +167,7 @@ def get_config():
             {
                             
                 'name': 'qfilm',
-                'domain': 'https://a.qfilm.tv',
+                'domain': 'https://a.qfilm.tvv',
                 'search_path': '/?s={query}',
                 'card_selector': (
                     'a[href*="/watch/"], a[href*="/play.php"], a[href*="vid="'
