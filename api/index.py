@@ -25,7 +25,7 @@ LARROZA_BASE_DOMAIN = 'https://larroza.mom'
 
 
 # ==============================================================================
-# 1. اكتشاف دومين أكوام النشط تلقائياً (فقط إذا كان مفعلاً في القائمة)
+# 1. اكتشاف دومين أكوام النشط تلقائياً (يعمل دائماً لدعم المحتوى والكتالوج)
 # ==============================================================================
 
 def safe_url(url):
@@ -55,28 +55,42 @@ def get_akwam_headers(referer_url=None):
     }
 
 # ==============================================================================
-# 2. قائمة المزودات المركزية (التحكم الكلي بما يتم كشطه وتفعيله)
+# 2. قائمة المزودات المخصصة للكشط والتوجيه (تعديلها يخص الكشط فقط ولا يكسر المحتوى)
 # ==============================================================================
 
 def get_providers_config():
     return [
-                    {
-                'name': 'qfilm',
-                'domain': 'https://a.qfilm.tv',
-                'search_path': '/?s={query}',
-                'card_selector': (
-                    'a[href*="/watch/"], a[href*="/play.php"], a[href*="vid="'
-                    ')'
-                ),
-                'watch_selector': (
-                    'iframe, [data-link], [data-url], [data-post],'
-                    ' a[href*="watch.php"], a[href*="play.php"]'
-                ),
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-                'requires_unpack': True,
-                'ajax_required': False,
-            },
-
+        {
+            'name': 'akwam',
+            'domain': AKWAM_BASE_DOMAIN,
+            'search_path': '/search?q={query}',
+            'movie_selector': 'a[href*=/movie/]',
+            'series_selector': 'a[href*=/series/]',
+            'ep_selector': 'a[href*=/episode/]',
+            'watch_selector': 'a[href*=/watch/], a.link-btn',
+            'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
+            'requires_unpack': False,
+        },
+        {
+            'name': 'larroza',
+            'domain': LARROZA_BASE_DOMAIN,
+            'search_path': '/search.php?keywords={query}',
+            'card_selector': 'a[href*=video.php]',
+            'iframe_selector': 'iframe',
+            'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+            'requires_unpack': True,
+        },
+        {
+            'name': 'moviz-time',
+            'domain': 'https://moviz-time.site',
+            'search_path': '/?s={query}',
+            'card_selector': 'a[href*="/watch/"], a[href*="/series/"], article.post a',
+            'watch_selector': 'iframe, [data-link], [data-url], [data-post]',
+            'iframe_selector': 'iframe, iframe[data-src]',
+            'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+            'requires_unpack': True,
+            'ajax_required': True,
+        },
     ]
 
 
@@ -154,23 +168,23 @@ def index():
     active_providers = [p['name'] for p in get_providers_config()]
     return jsonify({
         'status': 'online',
-        'mode': 'Strict Dynamic Providers Engine',
+        'mode': 'Independent Content & Scraper Engine',
         'active_providers': active_providers,
-        'version': '6.4.0',
+        'version': '6.4.1',
     })
 
 @app.route('/api/config', methods=['GET'])
 def get_config():
-    """تزويد التطبيق حصرياً بالمواقع الموجودة في قائمة المزودات النشطة."""
+    """تزويد التطبيق بقواعد الكشط الخاصة بالمزودات."""
     return jsonify({
         'status': 'success',
-        'version': '6.4.0',
+        'version': '6.4.1',
         'providers': get_providers_config(),
     })
 
 @app.route('/api/home', methods=['GET'])
 def get_home():
-    """جلب القوائم الرئيسية للأفلام والمسلسلات عبر TMDB"""
+    """جلب القوائم الرئيسية للأفلام والمسلسلات عبر TMDB وأكوام كمرجع أساسي للمحتوى"""
     try:
         trending_movies = []
         trending_tv = []
@@ -182,14 +196,11 @@ def get_home():
             m_res = requests.get(movies_url, headers=TMDB_HEADERS, timeout=4)
             t_res = requests.get(tv_url, headers=TMDB_HEADERS, timeout=4)
 
-            providers = get_providers_config()
-            provider_names = [p['name'] for p in providers]
-
             if m_res.status_code == 200:
                 trending_movies = [
                     {
                         'id': str(m.get('id', '')),
-                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(m.get('title') or m.get('original_title', ''))}" if 'akwam' in provider_names else '',
+                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(m.get('title') or m.get('original_title', ''))}",
                         'title': m.get('title') or m.get('original_title', ''),
                         'original_title': m.get('original_title', ''),
                         'poster': format_poster(m.get('poster_path')),
@@ -206,7 +217,7 @@ def get_home():
                 trending_tv = [
                     {
                         'id': str(t.get('id', '')),
-                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(t.get('name') or t.get('original_name', ''))}" if 'akwam' in provider_names else '',
+                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(t.get('name') or t.get('original_name', ''))}",
                         'title': t.get('name') or t.get('original_name', ''),
                         'original_title': t.get('original_name', ''),
                         'poster': format_poster(t.get('poster_path')),
@@ -221,8 +232,8 @@ def get_home():
         except Exception as tmdb_err:
             print(f'⚠️ TMDB Fetch Exception: {tmdb_err}')
 
-        provider_names = [p['name'] for p in get_providers_config()]
-        if not trending_movies and 'akwam' in provider_names:
+        # محتوى احتياطي من أكوام للمحافظة على استمرارية العرض بغض النظر عن قائمة الكشط
+        if not trending_movies:
             try:
                 res_m = requests.get(f'{AKWAM_BASE_DOMAIN}/movies', headers=get_akwam_headers(), timeout=4)
                 soup_m = BeautifulSoup(res_m.text, 'html.parser')
@@ -230,7 +241,7 @@ def get_home():
             except Exception:
                 pass
 
-        if not trending_tv and 'akwam' in provider_names:
+        if not trending_tv:
             try:
                 res_t = requests.get(f'{AKWAM_BASE_DOMAIN}/series', headers=get_akwam_headers(), timeout=4)
                 soup_t = BeautifulSoup(res_t.text, 'html.parser')
@@ -263,11 +274,7 @@ def get_home():
 
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
-    """جلب قائمة الكتالوج (مرتبط بأكوام حصرياً إذا كان مفعلاً)"""
-    provider_names = [p['name'] for p in get_providers_config()]
-    if 'akwam' not in provider_names:
-        return jsonify({'status': 'success', 'data': {'items': []}})
-
+    """جلب قائمة الكتالوج من أكوام بشكل مستقل تماماً عن قائمة الكشط"""
     cat_type = request.args.get('type', 'movies').lower()
     page = request.args.get('page', '1')
     catalog_url = safe_url(f'{AKWAM_BASE_DOMAIN}/{cat_type}?page={page}')
@@ -288,12 +295,12 @@ def get_catalog():
             },
         })
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        return jsonify({'status': 'success', 'data': {'items': []}, 'message': str(e)}), 500
 
 
 @app.route('/api/search', methods=['GET'])
 def search():
-    """البحث الديناميكي: توليد الروابط حصرياً بناءً على قائمة المزودات النشطة الحالية"""
+    """البحث الديناميكي: دمج TMDB مع بناء روابط المزودات النشطة للتطبيق"""
     query = request.args.get('q', '')
     if not query:
         return jsonify({'status': 'error', 'message': 'Query missing'}), 400
@@ -330,7 +337,8 @@ def search():
                     search_path = p['search_path'].format(query=quote(title))
                     sources[p_name] = f"{p_domain}{search_path}"
 
-                default_url = sources.get(list(sources.keys())[0], '') if sources else ''
+                # إذا لم يكن أكوام في المزودات، نترك رابط افتراضي ليعمل البحث دون توقف
+                default_url = sources.get(list(sources.keys())[0], f"{AKWAM_BASE_DOMAIN}/search?q={quote(title)}")
 
                 items.append({
                     'id': str(item.get('id', '')),
@@ -354,17 +362,17 @@ def search():
 
 @app.route('/api/series-details', methods=['GET'])
 def get_series_details():
-    """جلب تفاصيل وحلقات المسلسل (يعتمد على أكوام إذا كان مفعلاً، أو TMDB)"""
+    """جلب تفاصيل وحلقات المسلسل باستقلالية تامة"""
     series_url = request.args.get('url', '').strip()
     tmdb_id = request.args.get('id', '').strip()
     title = request.args.get('title', '').strip()
     orig_title = request.args.get('original_title', '').strip()
     selected_season = request.args.get('season', '1').strip()
 
-    provider_names = [p['name'] for p in get_providers_config()]
     clean_tmdb_id = tmdb_id if (tmdb_id and tmdb_id.isdigit()) else None
 
-    if 'akwam' in provider_names and series_url and series_url.startswith('http') and '/series/' in series_url:
+    # محاولة جلب الحلقات من أكوام مباشرة
+    if series_url and series_url.startswith('http') and '/series/' in series_url:
         try:
             target_url = safe_url(series_url)
             res = requests.get(target_url, headers=get_akwam_headers(target_url), timeout=4)
@@ -377,6 +385,7 @@ def get_series_details():
         except Exception:
             pass
 
+    # الاحتياطي عبر TMDB API
     if clean_tmdb_id:
         try:
             season_num = int(selected_season) if selected_season.isdigit() else 1
