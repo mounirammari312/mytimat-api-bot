@@ -165,18 +165,19 @@ def get_config():
         'status': 'success',
         'version': '6.3.0',
         'providers': [
-         {
-    'name': 'moviz-time',
-    'domain': 'https://moviz-time.site',
-    'search_path': '/?q={query}',
-    'card_selector': 'a[href*="/series/"]',
-    'watch_selector': 'iframe, [data-link], [data-url]',
-    'iframe_selector': 'iframe',
-    'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-    'requires_unpack': False,
-    'ajax_required': False,
-    'series_selector': 'a[href*="/series/"]',
-},
+          {
+                'name': 'moviz-time',
+                'domain': 'https://moviz-time.site',
+                'search_path': '/?s={query}',
+                'card_selector': (
+                    'a[href*="/watch/"], a[href*="/series/"], article.post a'
+                ),
+                'watch_selector': 'iframe, [data-link], [data-url], [data-post]',
+                'iframe_selector': 'iframe, iframe[data-src]',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+                'requires_unpack': True,
+                'ajax_required': True,
+            },
 
         ],
     })
