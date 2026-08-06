@@ -167,13 +167,14 @@ def get_config():
         'providers': [
 
       {
-                'name': 'larroza',
-                'domain': LARROZA_BASE_DOMAIN,
-                'search_path': '/search.php?keywords={query}',
-                'card_selector': 'a[href*=video.php]',
-                'iframe_selector': 'iframe',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-                'requires_unpack': True,
+                'name': 'mycimma',
+    'domain': 'https://mycimma.skin',
+    'search_path': '/?s={query}',
+    'card_selector': 'a[href*="/watch/"], a[href*="/play.php"], a[href*="vid="]',
+    'watch_selector': 'iframe, [data-link], [data-url], [data-post], a[href*="watch.php"], a[href*="play.php"]',
+    'link_regex': r'https?://[^\s"'<>]+\.(?:m3u8|mp4|txt)[^\s"'<>]*',
+    'requires_unpack': True,
+    'ajax_required': False
             },
 
 
