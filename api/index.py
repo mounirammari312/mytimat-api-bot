@@ -167,19 +167,19 @@ def get_config():
         'providers': [
 
 
-
-         {
-              'name': 'moviz-time',
-              'domain': 'https://moviz-time.site',
-              'search_path': '/?s={query}',
-              'card_selector': (
-                  'a[href*="فيلم"], a[href*="مسلسل"], a[href*="/watch/"]'
-              ),
-              'watch_selector': 'iframe, [data-link], [data-url], [data-post]',
-              'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-              'requires_unpack': True,   # 👈 احرص أن تكون الحروف الأولى كبيراً True
-              'ajax_required': True,     # 👈 احرص أن تكون الحروف الأولى كبيراً True
-          },
+        {
+                'name': 'moviz-time',
+                'domain': 'https://moviz-time.site',
+                'search_path': '/?s={query}',
+                'card_selector': (
+                    'a[href*="/watch/"], a[href*="/series/"], article.post a'
+                ),
+                'watch_selector': 'iframe, [data-link], [data-url], [data-post]',
+                'iframe_selector': 'iframe, iframe[data-src]',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+                'requires_unpack': True,
+                'ajax_required': True,
+            },
 
 
         ],
