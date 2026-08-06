@@ -60,37 +60,23 @@ def get_akwam_headers(referer_url=None):
 
 def get_providers_config():
     return [
-        {
-            'name': 'akwam',
-            'domain': AKWAM_BASE_DOMAIN,
-            'search_path': '/search?q={query}',
-            'movie_selector': 'a[href*=/movie/]',
-            'series_selector': 'a[href*=/series/]',
-            'ep_selector': 'a[href*=/episode/]',
-            'watch_selector': 'a[href*=/watch/], a.link-btn',
-            'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
-            'requires_unpack': False,
-        },
-        {
-            'name': 'larroza',
-            'domain': LARROZA_BASE_DOMAIN,
-            'search_path': '/search.php?keywords={query}',
-            'card_selector': 'a[href*=video.php]',
-            'iframe_selector': 'iframe',
-            'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-            'requires_unpack': True,
-        },
-        {
-            'name': 'moviz-time',
-            'domain': 'https://moviz-time.site',
-            'search_path': '/?s={query}',
-            'card_selector': 'a[href*="/watch/"], a[href*="/series/"], article.post a',
-            'watch_selector': 'iframe, [data-link], [data-url], [data-post]',
-            'iframe_selector': 'iframe, iframe[data-src]',
-            'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-            'requires_unpack': True,
-            'ajax_required': True,
-        },
+                    {
+                'name': 'qfilm',
+                'domain': 'https://a.qfilm.tv',
+                'search_path': '/?s={query}',
+                'card_selector': (
+                    'a[href*="/watch/"], a[href*="/play.php"], a[href*="vid="'
+                    ')'
+                ),
+                'watch_selector': (
+                    'iframe, [data-link], [data-url], [data-post],'
+                    ' a[href*="watch.php"], a[href*="play.php"]'
+                ),
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+                'requires_unpack': True,
+                'ajax_required': False,
+            },
+
     ]
 
 
