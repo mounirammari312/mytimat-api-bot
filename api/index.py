@@ -167,7 +167,7 @@ def get_config():
             {
                         
             
-        'name': 'royal-drama',
+            'name': 'royal-drama',
         'domain': 'https://w9.royal-drama.com',
         'search_path': '/?s={query}',
         'card_selector': 'a[href*="/watch/"], a[href*="/series/"]',
@@ -176,6 +176,8 @@ def get_config():
         'link_regex': 'https?://[^\\s"\\\'<>]+\\.(?:m3u8|mp4|txt)[^\\\\s"\\\'<>]*',
         'requires_unpack': True,
         'ajax_required': True,
+        'movie_selector': 'a[href*="/watch/"]',
+        'series_selector': 'a[href*="/series/"]'
         
 
             },
