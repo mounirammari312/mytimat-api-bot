@@ -165,12 +165,7 @@ def get_config():
         'version': '6.3.0',
         'providers': [
             {
-                        
-                    
-                
-                
-                
-     'name': 'qfilm',
+    'name': 'qfilm',
     'domain': 'https://a.qfilm.tv',
     'search_path': '/?s={query}',
     'card_selector': 'a[href*="/watch/"], a[href*="/play.php"], a[href*="vid="]',
@@ -181,8 +176,7 @@ def get_config():
 
 
 
-
-
+            
             },
         ],
     })
