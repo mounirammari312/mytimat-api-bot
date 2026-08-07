@@ -166,15 +166,17 @@ def get_config():
         'version': '6.3.0',
         'providers': [
  {
-    'name': 'mycimma',
-    'domain': 'https://mycimma.skin',
+    
+    'name': 'moviz-time',
+    'domain': 'https://moviz-time.site',
     'search_path': '/?s={query}',
-    'card_selector': 'a[href*="/watch/"], a[href*="/play.php"], a[href*="vid="]',
-    'watch_selector': 'iframe, [data-link], [data-url], [data-post], a[href*="watch.php"], a[href*="play.php"]',
+    'card_selector': 'a[href*="/watch/"], a[href*="/series/"], article.post a',
+    'watch_selector': 'iframe, [data-link], [data-url], [data-post], .single_tab',
     'iframe_selector': 'iframe, iframe[data-src]',
     'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
     'requires_unpack': True,
-    'ajax_required': True,  # تعديل جوهري لتوجيه الموقع للدالة الصحيحة في التطبيق
+    'ajax_required': True,
+    'series_selector': 'a[href*="/series/"]'
 
 
 },
