@@ -165,16 +165,20 @@ def get_config():
         'version': '6.3.0',
         'providers': [
             {
-                'name': 'moviz-time',
-                'domain': 'https://moviz-time.site',
-                'search_path': '/?s={query}',
-                'card_selector': 'a[href*="/watch/"], a[href*="/series/"], article.post a',
-                'watch_selector': 'iframe, [data-link], [data-url], [data-post], .single_tab, .play-btn, .server-item',
-                'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link]',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
-                'requires_unpack': True,
-                'ajax_required': True,
-                'series_selector': 'a[href*="/series/"]'
+                        
+            'name': 'moviz-time',
+            'domain': 'https://moviz-time.site',
+            'search_path': '/?s={query}',
+            'card_selector': 'a[href*="/watch/"], a[href*="/series/"], article.post a, .post-title a',
+            'watch_selector': 'iframe, [data-link], [data-url], [data-post], .single_tab, .play-btn, .server-item',
+            'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link]',
+            'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
+            'requires_unpack': True,
+            'ajax_required': True,
+            'series_selector': 'a[href*="/series/"]',
+            'movie_selector': 'a[href*="/watch/"]'
+        
+
             },
         ],
     })
