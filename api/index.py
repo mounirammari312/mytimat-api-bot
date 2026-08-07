@@ -167,6 +167,7 @@ def get_config():
             {        
                     
                 
+                    
             'name': 'qfilm',
             'domain': 'https://a.qfilm.tv',
             'search_path': '/?s={query}',
