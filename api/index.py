@@ -167,6 +167,7 @@ def get_config():
             {
                         
                     
+                
         'name': 'royal-drama',
         'domain': 'https://w9.royal-drama.com',
         'search_path': '/?s={query}',
@@ -179,6 +180,7 @@ def get_config():
         'movie_selector': 'a[href*="view.php?vid="]',
         'series_selector': 'a[href*="view.php?vid="]'
         
+
 
 
             },
