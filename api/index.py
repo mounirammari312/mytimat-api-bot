@@ -165,26 +165,7 @@ def get_config():
         'status': 'success',
         'version': '6.3.0',
         'providers': [
-            {
-                'name': 'akwam',
-                'domain': AKWAM_BASE_DOMAIN,
-                'search_path': '/search?q={query}',
-                'movie_selector': 'a[href*=/movie/]',
-                'series_selector': 'a[href*=/series/]',
-                'ep_selector': 'a[href*=/episode/]',
-                'watch_selector': 'a[href*=/watch/], a.link-btn',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
-                'requires_unpack': False,
-            },
-            {
-                'name': 'larroza',
-                'domain': LARROZA_BASE_DOMAIN,
-                'search_path': '/search.php?keywords={query}',
-                'card_selector': 'a[href*=video.php]',
-                'iframe_selector': 'iframe',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-                'requires_unpack': True,
-            },
+            
             {
                 'name': 'moviz-time',
                 'domain': 'https://moviz-time.site',
