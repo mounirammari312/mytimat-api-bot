@@ -166,19 +166,25 @@ def get_config():
         'version': '6.3.0',
         'providers': [
             {
-        'name': 'mycimma',
-        'domain': 'https://mycimma.skin',
-        'search_path': '/?s={query}',
-        'card_selector': 'a[href*="watch.php"]',
-        'watch_selector': 'a[href*="play.php"], a[href*="watch"], iframe, [data-src], [data-url]',
-        'iframe_selector': 'iframe',
-        'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-        'requires_unpack': False,
-        'ajax_required': False,
-        'movie_selector': 'a[href*="watch.php"]',
-        'series_selector': 'a[href*="series.php"]',
-        'ep_selector': 'a[href*="episode"]'
-        },
+                'name': 'akwam',
+                'domain': AKWAM_BASE_DOMAIN,
+                'search_path': '/search?q={query}',
+                'movie_selector': 'a[href*=/movie/]',
+                'series_selector': 'a[href*=/series/]',
+                'ep_selector': 'a[href*=/episode/]',
+                'watch_selector': 'a[href*=/watch/], a.link-btn',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
+                'requires_unpack': False,
+            },
+            {
+                'name': 'larroza',
+                'domain': LARROZA_BASE_DOMAIN,
+                'search_path': '/search.php?keywords={query}',
+                'card_selector': 'a[href*=video.php]',
+                'iframe_selector': 'iframe',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+                'requires_unpack': True,
+            },,
 
 
 
