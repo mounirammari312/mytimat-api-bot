@@ -174,7 +174,8 @@ def get_config():
     'iframe_selector': 'iframe, iframe[data-src]',
     'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
     'requires_unpack': True,
-    'ajax_required': False
+    'ajax_required': True,  # تعديل جوهري لتوجيه الموقع للدالة الصحيحة في التطبيق
+
 
 },
 
