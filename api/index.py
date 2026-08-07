@@ -168,18 +168,20 @@ def get_config():
                         
                     
                 
+                
         'name': 'royal-drama',
         'domain': 'https://w9.royal-drama.com',
         'search_path': '/?s={query}',
         'card_selector': 'a[href*="view.php?vid="]',
-        'watch_selector': 'iframe, [data-link], [data-url], [data-post], .single_tab, .play-btn, .server-item',
-        'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link]',
+        'watch_selector': 'iframe, [data-link], [data-url], [data-post]',
+        'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url]',
         'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
-        'requires_unpack': True,
-        'ajax_required': True,
+        'requires_unpack': False,
+        'ajax_required': False,
         'movie_selector': 'a[href*="view.php?vid="]',
         'series_selector': 'a[href*="view.php?vid="]'
         
+
 
 
 
