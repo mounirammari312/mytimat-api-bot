@@ -166,14 +166,18 @@ def get_config():
         'providers': [
             {        
                     
+                
             'name': 'qfilm',
             'domain': 'https://a.qfilm.tv',
             'search_path': '/?s={query}',
             'card_selector': 'a[href*="/watch/"], a[href*="/play.php"], a[href*="vid="]',
-            'watch_selector': 'iframe, [data-link], [data-url], [data-post], a[href*="watch.php"], a[href*="play.php"]',
-            'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
+            'watch_selector': 'iframe, [data-link], [data-url], [data-post], a[href*="watch.php"], a[href*="play.php"], .single_tab, .play-btn',
+            'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link]',
+            'link_regex': r'https?://[^\s"'<>]+\.(?:m3u8|mp4|txt)[^\s"'<>]*',
             'requires_unpack': True,
-            'ajax_required': False
+            'ajax_required': True
+        
+
         
 
         
