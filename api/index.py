@@ -168,9 +168,11 @@ def get_config():
             
             {
                 
+                
             
                 
                             
+                
                 "name": "cinejoy",
                 "domain": "https://cinejoy.to",
                 "searchPath": "/watch/movie/{query}",
@@ -178,7 +180,7 @@ def get_config():
                 "requiresUnpack": False,
                 "ajaxRequired": True,
                 "tmdb_mode": True
-            
+
 
 
 
