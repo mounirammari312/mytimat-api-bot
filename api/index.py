@@ -173,15 +173,12 @@ def get_config():
                 
                             
                 
-                "name": "cinejoy",
-                "domain": "https://cinejoy.to",
-                "searchPath": "/watch/movie/{query}",
-                "linkRegex": "https?://[^\\s\"'<>]+?\\.(?:m3u8|mp4|ts|txt)(?:\\?[^\\s\"'<>]*)?",
-                "requiresUnpack": False,
-                "ajaxRequired": True,
-                "tmdb_mode": True
-
-
+                
+    'name': 'cinejoy',
+    'domain': 'https://cinejoy.to',
+    'search_path': '/search?q={query}',
+    'tmdb_mode': True,  # ← هذا يفعّل SPA scraper
+    'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
 
 
 
