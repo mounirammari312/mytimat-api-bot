@@ -170,18 +170,16 @@ def get_config():
                 
             
                 
+                            
                 "name": "cinejoy",
                 "domain": "https://cinejoy.to",
                 "searchPath": "/watch/movie/{query}",
-                "cardSelector": "a[href*=\"/watch/\"]",
-                "movieSelector": "a[href*=\"/watch/movie/\"]",
-                "seriesSelector": "a[href*=\"/watch/tv/\"]",
-                "watchSelector": "iframe, [data-link]",
-                "iframeSelector": "iframe, [data-src]",
-                "requiresUnpack": false,
-                "ajaxRequired": true,
+                "linkRegex": "https?://[^\\s\"'<>]+?\\.(?:m3u8|mp4|ts|txt)(?:\\?[^\\s\"'<>]*)?",
+                "requiresUnpack": False,
+                "ajaxRequired": True,
                 "tmdb_mode": True
             
+
 
 
 
