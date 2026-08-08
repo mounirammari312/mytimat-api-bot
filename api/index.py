@@ -168,15 +168,15 @@ def get_config():
             
             {
                 
-    'name': 'qfilm',
-    'domain': 'https://a.qfilm.tv',
-    'search_path': '/search.php?keywords={query}',
-    'card_selector': 'a[href*="watch.php"]',
-    'watch_selector': 'a[href*="play.php"], a[href*="watch.php"], a[href*="embed.php"], iframe, [data-url]',
-    'iframe_selector': 'iframe',
-    'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
-    'requires_unpack': False,
-    'ajax_required': False
+       "name": "a",
+    "domain": "https://a.qfilm.tv",
+    "search_path": "/search.php?keywords={query}",
+    "card_selector": "a[href*=\"watch.php\"]",
+    "watch_selector": "a[href*=\"play.php\"], a[href*=\"watch.php\"], a[href*=\"embed.php\"], iframe, [data-url]",
+    "iframe_selector": "iframe",
+    "link_regex": "https?://[^\\s\"\\'<>]+\\.(?:m3u8|mp4|txt)[^\\s\"\\'<>]*",
+    "requires_unpack": false,
+    "ajax_required": false
 
             },
         ],
