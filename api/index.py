@@ -1,9 +1,8 @@
 from urllib.parse import quote, unquote, urlparse
 from bs4 import BeautifulSoup
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, make_response
 import requests
 import re
-import time
 
 # ==============================================================================
 # 🛠️ إعدادات التطبيق والسيرفر الرئيسي (Vercel Entrypoint)
@@ -13,31 +12,6 @@ app = Flask(__name__)
 
 TMDB_API_KEY = '65687d1e167bc35f38ee0c88c3a37b74'
 TMDB_BASE_URL = 'https://api.themoviedb.org/3'
-
-# ==============================================================================
-# v9.0: الكاش الذكي المؤقت (In-Memory Cache) — TTL 6 ساعات
-# ==============================================================================
-
-SCRAPE_CACHE = {}
-CACHE_TTL = 6 * 3600  # 21,600 ثانية (6 ساعات)
-
-
-def get_cached(key):
-    """يرجع النتيجة المخزنة إن لم تنتهِ صلاحيتها، وإلا None."""
-    entry = SCRAPE_CACHE.get(key)
-    if entry is None:
-        return None
-    timestamp, data = entry
-    if time.time() - timestamp > CACHE_TTL:
-        del SCRAPE_CACHE[key]
-        return None
-    return data
-
-
-def set_cached(key, data):
-    """يخزن النتيجة مع التوقيت الحالي."""
-    SCRAPE_CACHE[key] = (time.time(), data)
-
 
 TMDB_HEADERS = {
     'User-Agent': (
@@ -51,8 +25,14 @@ LARROZA_BASE_DOMAIN = 'https://larroza.mom'
 
 
 # ==============================================================================
-# 1. اكتشاف دومين أكوام النشط تلقائياً
+# دالة مساعدة لإضافة ترويسات الكاش لـ Vercel CDN (6 ساعات)
 # ==============================================================================
+
+def cached_json_response(data_dict, max_age_seconds=21600):
+    """تغليف الـ JSON مع ترويسات Cache-Control لحفظ الاستجابة في Vercel CDN Edge."""
+    res = make_response(jsonify(data_dict))
+    res.headers['Cache-Control'] = f'public, max-age={max_age_seconds}, s-maxage={max_age_seconds}, stale-while-revalidate=3600'
+    return res
 
 
 def safe_url(url):
@@ -60,7 +40,6 @@ def safe_url(url):
 
 
 def get_active_akwam_domain():
-    """جلب النطاق النشط لموقع أكوام تلقائياً عبر رابط التوجيه ak.sv"""
     try:
         res = requests.get(
             'https://ak.sv/',
@@ -83,11 +62,6 @@ def get_akwam_headers(referer_url=None):
         'User-Agent': TMDB_HEADERS['User-Agent'],
         'Referer': ref,
     }
-
-
-# ==============================================================================
-# 2. دوال تنسيق بطاقات أكوام و TMDB
-# ==============================================================================
 
 
 def format_poster(poster_path):
@@ -162,7 +136,7 @@ def parse_akwam_cards(soup):
 
 
 # ==============================================================================
-# 3. مسارات الـ API الكلية والكاملة (All Required Routes)
+# 3. مسارات الـ API مع Vercel Edge Caching
 # ==============================================================================
 
 
@@ -175,19 +149,28 @@ def index():
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '9.0.0',
+        'version': '9.1.0-VercelEdge',
     })
 
 
 @app.route('/api/config', methods=['GET'])
 def get_config():
-    """تزويد التطبيق بجميع المواقع وقواعد الكشط الديناميكية"""
-    return jsonify({
+    return cached_json_response({
         'status': 'success',
-        'version': '9.0.0',
+        'version': '9.1.0-VercelEdge',
         'providers': [
             {
-                
+                'name': 'akwam',
+                'domain': AKWAM_BASE_DOMAIN,
+                'search_path': '/search?q={query}',
+                'movie_selector': 'a[href*=/movie/]',
+                'series_selector': 'a[href*=/series/]',
+                'ep_selector': 'a[href*=/episode/]',
+                'watch_selector': 'a[href*=/watch/], a.link-btn',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
+                'requires_unpack': False,
+            },
+            {
                 'name': 'larroza',
                 'domain': LARROZA_BASE_DOMAIN,
                 'search_path': '/search.php?keywords={query}',
@@ -195,7 +178,18 @@ def get_config():
                 'iframe_selector': 'iframe',
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'requires_unpack': True,
-        
+            },
+            {
+                'name': 'moviz-time',
+                'domain': 'https://moviz-time.site',
+                'search_path': '/?s={query}',
+                'card_selector': 'a[href*="/watch/"], a[href*="/series/"], article.post a',
+                'watch_selector': 'iframe, [data-link], [data-url], [data-post], .single_tab, .play-btn, .server-item',
+                'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link]',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
+                'requires_unpack': True,
+                'ajax_required': True,
+                'series_selector': 'a[href*="/series/"]'
             },
         ],
     })
@@ -203,12 +197,6 @@ def get_config():
 
 @app.route('/api/home', methods=['GET'])
 def get_home():
-    """جلب القوائم الرئيسية للأفلام والمسلسلات مع دعم الكاش"""
-    # 1. تحقق من الكاش
-    cached = get_cached('home')
-    if cached is not None:
-        return jsonify(cached)
-
     try:
         trending_movies = []
         trending_tv = []
@@ -317,10 +305,9 @@ def get_home():
                 },
             ],
         }
-        
-        # حفظ في الكاش وإرجاع النتيجة
-        set_cached('home', result)
-        return jsonify(result)
+
+        # إرجاع مع Vercel CDN Cache
+        return cached_json_response(result)
 
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -328,16 +315,8 @@ def get_home():
 
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
-    """جلب قائمة الكتالوج وتصفح الأقسام والصفحات مع دعم الكاش"""
     cat_type = request.args.get('type', 'movies').lower()
     page = request.args.get('page', '1')
-
-    # 1. تحقق من الكاش
-    cache_key = f'catalog:{cat_type}:{page}'
-    cached = get_cached(cache_key)
-    if cached is not None:
-        return jsonify(cached)
-
     section = request.args.get('section', '')
     category = request.args.get('category', '')
     year = request.args.get('year', '')
@@ -389,9 +368,7 @@ def get_catalog():
             },
         }
 
-        # حفظ في الكاش وإرجاع النتيجة
-        set_cached(cache_key, result)
-        return jsonify(result)
+        return cached_json_response(result)
 
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -399,16 +376,9 @@ def get_catalog():
 
 @app.route('/api/search', methods=['GET'])
 def search():
-    """البحث في TMDB بالأسماء العربية والإنجليزية مع دعم الكاش"""
     query = request.args.get('q', '')
     if not query:
         return jsonify({'status': 'error', 'message': 'Query missing'}), 400
-
-    # 1. تحقق من الكاش
-    cache_key = f'search:{query}'
-    cached = get_cached(cache_key)
-    if cached is not None:
-        return jsonify(cached)
 
     try:
         search_url = f'{TMDB_BASE_URL}/search/multi?api_key={TMDB_API_KEY}&query={quote(query)}&language=ar-SA'
@@ -450,24 +420,15 @@ def search():
                 })
 
         result = {'status': 'success', 'data': items}
-        
-        # حفظ في الكاش وإرجاع النتيجة
-        set_cached(cache_key, result)
-        return jsonify(result)
+        return cached_json_response(result)
 
     except Exception as e:
         print(f"⚠️ Search Error: {e}")
         return jsonify({'status': 'success', 'data': []})
 
 
-# ==============================================================================
-# 4. مسار تفاصيل المسلسل (Series Details)
-# ==============================================================================
-
-
 @app.route('/api/series-details', methods=['GET'])
 def get_series_details():
-    """جلب تفاصيل المسلسل وحلقات الموسم المحدد"""
     series_url = request.args.get('url', '').strip()
     tmdb_id = request.args.get('id', '').strip()
     title = request.args.get('title', '').strip()
@@ -480,7 +441,6 @@ def get_series_details():
     elif series_url and series_url.isdigit():
         clean_tmdb_id = series_url
 
-    # 1️⃣ أكوام مباشر
     if series_url and series_url.startswith('http') and '/series/' in series_url:
         try:
             target_url = safe_url(series_url)
@@ -515,14 +475,13 @@ def get_series_details():
                         episodes.append({'title': ep.get_text(strip=True), 'url': ep_href})
 
                 if episodes or seasons:
-                    return jsonify({
+                    return cached_json_response({
                         'status': 'success',
                         'data': {'seasons': seasons, 'episodes': episodes},
                     })
         except Exception as e:
             print(f'⚠️ Akwam Direct Series Error: {e}')
 
-    # 2️⃣ البحث في أكوام
     search_term = title or orig_title
     if not search_term and '/search' in series_url and 'q=' in series_url:
         try:
@@ -578,14 +537,13 @@ def get_series_details():
                             episodes.append({'title': ep.get_text(strip=True), 'url': ep_href})
 
                     if episodes or seasons:
-                        return jsonify({
+                        return cached_json_response({
                             'status': 'success',
                             'data': {'seasons': seasons, 'episodes': episodes},
                         })
         except Exception as e:
             print(f'⚠️ Akwam Search Resolution Error: {e}')
 
-    # 3️⃣ TMDB API
     if clean_tmdb_id:
         try:
             tmdb_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}?api_key={TMDB_API_KEY}&language=ar-SA'
@@ -624,7 +582,7 @@ def get_series_details():
                     ),
                 })
 
-            return jsonify({
+            return cached_json_response({
                 'status': 'success',
                 'data': {
                     'current_season': season_num,
@@ -642,14 +600,8 @@ def get_series_details():
     })
 
 
-# ==============================================================================
-# 5. مسار تفاصيل الفيلم (Movie Details)
-# ==============================================================================
-
-
 @app.route('/api/movie-details', methods=['GET'])
 def get_movie_details():
-    """جلب تفاصيل الفيلم من TMDB"""
     tmdb_id = request.args.get('id', '').strip()
     title = request.args.get('title', '').strip()
 
@@ -681,7 +633,7 @@ def get_movie_details():
             return jsonify({'status': 'success', 'data': None})
 
         data = res.json()
-        return jsonify({
+        return cached_json_response({
             'status': 'success',
             'data': {
                 'id': str(data.get('id', '')),
