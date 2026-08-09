@@ -1,4 +1,3 @@
-
 from urllib.parse import quote, unquote, urlparse
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
@@ -165,37 +164,13 @@ def get_config():
         'status': 'success',
         'version': '6.3.0',
         'providers': [
-            
             {
                 
-                
-            
-                
-                            
-                
-                
-
-  "name": "cinejoy",
-  "domain": "https://downloads.shegu.st",
-  "search_path": "/movie/{tmdb_id}",
-  "tmdb_mode": true,
-  "headers": {
-    "Origin": "https://cinejoy.to",
-    "Referer": "https://cinejoy.to/",
-    "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
-  },
-  "link_regex": "https?://[^\s\"'<>]+\\.(?:m3u8|mp4|mkv)[^\s\"'<>]*|https?://[^\s\"'<>]*r2\\.cloudflarestorage[^\s\"'<>]*"
-
-
-
-
-
-
-            
-
-
-            
-        
+    'name': 'cinejoy',
+    'domain': 'https://downloads.shegu.st',
+    'search_path': '/movie/{tmdb_id}',
+    'tmdb_mode': True,
+    'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|mkv)[^\s"\'<>]*|https?://[^\s"\'<>]*r2\.cloudflarestorage[^\s"\'<>]*',
 
 
             },
@@ -702,3 +677,4 @@ def get_movie_details():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
+
