@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
 import requests
 import re
+import time
 
 # ==============================================================================
 # 🛠️ إعدادات التطبيق والسيرفر الرئيسي (Vercel Entrypoint)
@@ -12,6 +13,30 @@ app = Flask(__name__)
 
 TMDB_API_KEY = '65687d1e167bc35f38ee0c88c3a37b74'
 TMDB_BASE_URL = 'https://api.themoviedb.org/3'
+
+# ==============================================================================
+# v9.0: الكاش الذكي المؤقت (In-Memory Cache) — TTL 6 ساعات
+# ==============================================================================
+
+SCRAPE_CACHE = {}
+CACHE_TTL = 6 * 3600  # 21,600 ثانية (6 ساعات)
+
+
+def get_cached(key):
+    """يرجع النتيجة المخزنة إن لم تنتهِ صلاحيتها، وإلا None."""
+    entry = SCRAPE_CACHE.get(key)
+    if entry is None:
+        return None
+    timestamp, data = entry
+    if time.time() - timestamp > CACHE_TTL:
+        del SCRAPE_CACHE[key]
+        return None
+    return data
+
+
+def set_cached(key, data):
+    """يخزن النتيجة مع التوقيت الحالي."""
+    SCRAPE_CACHE[key] = (time.time(), data)
 
 TMDB_HEADERS = {
     'User-Agent': (
@@ -165,14 +190,37 @@ def get_config():
         'version': '6.3.0',
         'providers': [
             {
-                    
-                'name': 'cinejoy',
-                'domain': 'https://downloads.shegu.st',
-                'search_path': '/movie/{tmdb_id}',
-                'tmdb_mode': True,
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|mkv)[^\s"\'<>]*|https?://[^\s"\'<>]*r2\.cloudflarestorage[^\s"\'<>]*',
+                'name': 'akwam',
+                'domain': AKWAM_BASE_DOMAIN,
+                'search_path': '/search?q={query}',
+                'movie_selector': 'a[href*=/movie/]',
+                'series_selector': 'a[href*=/series/]',
+                'ep_selector': 'a[href*=/episode/]',
+                'watch_selector': 'a[href*=/watch/], a.link-btn',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
+                'requires_unpack': False,
             },
-            
+            {
+                'name': 'larroza',
+                'domain': LARROZA_BASE_DOMAIN,
+                'search_path': '/search.php?keywords={query}',
+                'card_selector': 'a[href*=video.php]',
+                'iframe_selector': 'iframe',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+                'requires_unpack': True,
+            },
+            {
+                'name': 'moviz-time',
+                'domain': 'https://moviz-time.site',
+                'search_path': '/?s={query}',
+                'card_selector': 'a[href*="/watch/"], a[href*="/series/"], article.post a',
+                'watch_selector': 'iframe, [data-link], [data-url], [data-post], .single_tab, .play-btn, .server-item',
+                'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link]',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
+                'requires_unpack': True,
+                'ajax_required': True,
+                'series_selector': 'a[href*="/series/"]'
+            },
         ],
     })
 
@@ -180,6 +228,11 @@ def get_config():
 @app.route('/api/home', methods=['GET'])
 def get_home():
     """جلب القوائم الرئيسية للأفلام والمسلسلات"""
+    # v9.0: تحقق من الكاش أولاً
+    cached = get_cached('home')
+    if cached is not None:
+        return jsonify(cached)
+
     try:
         trending_movies = []
         trending_tv = []
@@ -288,6 +341,9 @@ def get_home():
                 },
             ],
         })
+        # v9.0: احفظ في الكاش
+        set_cached('home', result)
+        return jsonify(result)
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
@@ -297,6 +353,12 @@ def get_catalog():
     """جلب قائمة الكتالوج وتصفح الأقسام والصفحات"""
     cat_type = request.args.get('type', 'movies').lower()
     page = request.args.get('page', '1')
+
+    # v9.0: تحقق من الكاش
+    cache_key = f'catalog:{cat_type}:{page}'
+    cached = get_cached(cache_key)
+    if cached is not None:
+        return jsonify(cached)
 
     section = request.args.get('section', '')
     category = request.args.get('category', '')
@@ -359,6 +421,12 @@ def search():
     if not query:
         return jsonify({'status': 'error', 'message': 'Query missing'}), 400
 
+    # v9.0: تحقق من الكاش
+    cache_key = f'search:{query}'
+    cached = get_cached(cache_key)
+    if cached is not None:
+        return jsonify(cached)
+
     try:
         search_url = f'{TMDB_BASE_URL}/search/multi?api_key={TMDB_API_KEY}&query={quote(query)}&language=ar-SA'
 
@@ -403,7 +471,9 @@ def search():
                     'type': m_type,
                 })
 
-        return jsonify({'status': 'success', 'data': items})
+        result = {'status': 'success', 'data': items}
+        set_cached(cache_key, result)
+        return jsonify(result)
 
     except Exception as e:
         print(f"⚠️ Search Error: {e}")
