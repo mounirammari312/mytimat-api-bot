@@ -174,10 +174,10 @@ def get_config():
                             
                 
                 
-    
+
   "name": "cinejoy",
   "domain": "https://downloads.shegu.st",
-  "movie_path": "/movie/{tmdb_id}",
+  "search_path": "/movie/{tmdb_id}",
   "tmdb_mode": true,
   "headers": {
     "Origin": "https://cinejoy.to",
@@ -185,6 +185,7 @@ def get_config():
     "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
   },
   "link_regex": "https?://[^\s\"'<>]+\\.(?:m3u8|mp4|mkv)[^\s\"'<>]*|https?://[^\s\"'<>]*r2\\.cloudflarestorage[^\s\"'<>]*"
+
 
 
 
