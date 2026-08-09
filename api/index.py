@@ -38,6 +38,7 @@ def set_cached(key, data):
     """يخزن النتيجة مع التوقيت الحالي."""
     SCRAPE_CACHE[key] = (time.time(), data)
 
+
 TMDB_HEADERS = {
     'User-Agent': (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -174,23 +175,19 @@ def index():
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '6.3.0',
+        'version': '9.0.0',
     })
 
 
 @app.route('/api/config', methods=['GET'])
 def get_config():
-    """تزويد التطبيق بجميع المواقع وقواعد الكشط الديناميكية لتحديث GenericScraper.
-
-    ملاحظة هامة: المحددات (selectors) يجب أن تستخدم صيغة CSS القياسية مثل
-    'a[href*=/movie/]' — لا تستخدم اختصارات أو إزالة الأقواس.
-    """
+    """تزويد التطبيق بجميع المواقع وقواعد الكشط الديناميكية"""
     return jsonify({
         'status': 'success',
-        'version': '6.3.0',
+        'version': '9.0.0',
         'providers': [
-            
             {
+                
                 'name': 'larroza',
                 'domain': LARROZA_BASE_DOMAIN,
                 'search_path': '/search.php?keywords={query}',
@@ -198,6 +195,7 @@ def get_config():
                 'iframe_selector': 'iframe',
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'requires_unpack': True,
+        
             },
         ],
     })
@@ -205,8 +203,8 @@ def get_config():
 
 @app.route('/api/home', methods=['GET'])
 def get_home():
-    """جلب القوائم الرئيسية للأفلام والمسلسلات"""
-    # v9.0: تحقق من الكاش أولاً
+    """جلب القوائم الرئيسية للأفلام والمسلسلات مع دعم الكاش"""
+    # 1. تحقق من الكاش
     cached = get_cached('home')
     if cached is not None:
         return jsonify(cached)
@@ -300,7 +298,7 @@ def get_home():
             soup_t = BeautifulSoup(res_t.text, 'html.parser')
             trending_tv = parse_akwam_cards(soup_t)[:10]
 
-        return jsonify({
+        result = {
             'status': 'success',
             'data': [
                 {
@@ -318,21 +316,23 @@ def get_home():
                     'items': trending_tv,
                 },
             ],
-        })
-        # v9.0: احفظ في الكاش
+        }
+        
+        # حفظ في الكاش وإرجاع النتيجة
         set_cached('home', result)
         return jsonify(result)
+
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
-    """جلب قائمة الكتالوج وتصفح الأقسام والصفحات"""
+    """جلب قائمة الكتالوج وتصفح الأقسام والصفحات مع دعم الكاش"""
     cat_type = request.args.get('type', 'movies').lower()
     page = request.args.get('page', '1')
 
-    # v9.0: تحقق من الكاش
+    # 1. تحقق من الكاش
     cache_key = f'catalog:{cat_type}:{page}'
     cached = get_cached(cache_key)
     if cached is not None:
@@ -371,7 +371,7 @@ def get_catalog():
         ]
         max_page = max(map(int, pages)) if pages else 1
 
-        return jsonify({
+        result = {
             'status': 'success',
             'data': {
                 'type': cat_type,
@@ -387,19 +387,24 @@ def get_catalog():
                 'items_count': len(items),
                 'items': items,
             },
-        })
+        }
+
+        # حفظ في الكاش وإرجاع النتيجة
+        set_cached(cache_key, result)
+        return jsonify(result)
+
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 @app.route('/api/search', methods=['GET'])
 def search():
-    """البحث في TMDB بالأسماء العربية والإنجليزية مع حماية كاملة ضد الانهيار"""
+    """البحث في TMDB بالأسماء العربية والإنجليزية مع دعم الكاش"""
     query = request.args.get('q', '')
     if not query:
         return jsonify({'status': 'error', 'message': 'Query missing'}), 400
 
-    # v9.0: تحقق من الكاش
+    # 1. تحقق من الكاش
     cache_key = f'search:{query}'
     cached = get_cached(cache_key)
     if cached is not None:
@@ -407,11 +412,8 @@ def search():
 
     try:
         search_url = f'{TMDB_BASE_URL}/search/multi?api_key={TMDB_API_KEY}&query={quote(query)}&language=ar-SA'
-
-        # رفع المهلة إلى 8 ثوانٍ لتجنب الانقطاع مع الإنترنت الضعيف
         res = requests.get(search_url, headers=TMDB_HEADERS, timeout=8)
 
-        # إذا لم تكن الاستجابة ناجحة، نُرجع قائمة فارغة بدلاً من انهيار التطبيق
         if res.status_code != 200:
             return jsonify({'status': 'success', 'data': []})
 
@@ -421,7 +423,6 @@ def search():
         for item in res_json.get('results', []):
             m_type = item.get('media_type')
             if m_type in ['movie', 'tv']:
-                # حماية تقييم الفيلم من القيم الفارغة لمنع أخطاء الـ Type
                 vote_avg = item.get('vote_average')
                 rating = round(vote_avg, 1) if isinstance(vote_avg, (int, float)) else 0.0
 
@@ -429,7 +430,6 @@ def search():
                 orig_title = item.get('original_name') or item.get('original_title') or ''
                 poster_path = item.get('poster_path')
 
-                # تجهيز الروابط لكل المواقع المتاحة لتفادي الارتباط بموقع واحد فقط
                 sources = {
                     'akwam': f"{AKWAM_BASE_DOMAIN}/search?q={quote(title)}",
                     'larroza': f"{LARROZA_BASE_DOMAIN}/search.php?keywords={quote(title)}",
@@ -438,8 +438,8 @@ def search():
 
                 items.append({
                     'id': str(item.get('id', '')),
-                    'url': sources['akwam'],  # الرابط الافتراضي للتوافق مع التطبيق
-                    'sources': sources,       # روابط إضافية لكل المواقع
+                    'url': sources['akwam'],
+                    'sources': sources,
                     'title': title,
                     'original_title': orig_title,
                     'poster': format_poster(poster_path),
@@ -450,12 +450,13 @@ def search():
                 })
 
         result = {'status': 'success', 'data': items}
+        
+        # حفظ في الكاش وإرجاع النتيجة
         set_cached(cache_key, result)
         return jsonify(result)
 
     except Exception as e:
         print(f"⚠️ Search Error: {e}")
-        # الحماية القصوى: إرجاع قائمة فارغة بكود 200 لمنع Force Close في تطبيق الأندرويد
         return jsonify({'status': 'success', 'data': []})
 
 
@@ -466,21 +467,20 @@ def search():
 
 @app.route('/api/series-details', methods=['GET'])
 def get_series_details():
-    """جلب تفاصيل المسلسل وحلقات الموسم المحدد مع المعالجة الهجينة لمنع أخطاء 404"""
+    """جلب تفاصيل المسلسل وحلقات الموسم المحدد"""
     series_url = request.args.get('url', '').strip()
     tmdb_id = request.args.get('id', '').strip()
     title = request.args.get('title', '').strip()
     orig_title = request.args.get('original_title', '').strip()
     selected_season = request.args.get('season', '1').strip()
 
-    # استخراج معرف TMDB سواء تم تمريره في id أو url
     clean_tmdb_id = None
     if tmdb_id and tmdb_id.isdigit():
         clean_tmdb_id = tmdb_id
     elif series_url and series_url.isdigit():
         clean_tmdb_id = series_url
 
-    # 1️⃣ المحاولة الأولى: إذا كان لدينا رابط مباشر لصفحة المسلسل في أكوام (يحتوي على /series/)
+    # 1️⃣ أكوام مباشر
     if series_url and series_url.startswith('http') and '/series/' in series_url:
         try:
             target_url = safe_url(series_url)
@@ -522,7 +522,7 @@ def get_series_details():
         except Exception as e:
             print(f'⚠️ Akwam Direct Series Error: {e}')
 
-    # 2️⃣ المحاولة الثانية: إذا كان الرابط رابط بحث، يتم استخراج الاسم والبحث عن صفحة المسلسل في أكوام
+    # 2️⃣ البحث في أكوام
     search_term = title or orig_title
     if not search_term and '/search' in series_url and 'q=' in series_url:
         try:
@@ -585,7 +585,7 @@ def get_series_details():
         except Exception as e:
             print(f'⚠️ Akwam Search Resolution Error: {e}')
 
-    # 3️⃣ المحاولة الثالثة: جلب المواسم والحلقات رسمياً من TMDB API
+    # 3️⃣ TMDB API
     if clean_tmdb_id:
         try:
             tmdb_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}?api_key={TMDB_API_KEY}&language=ar-SA'
@@ -635,7 +635,6 @@ def get_series_details():
         except Exception as tmdb_err:
             print(f'⚠️ TMDB Series Season Switch Error: {tmdb_err}')
 
-    # 4️⃣ الاستجابة الاحتياطية المضمونة بـ 200 OK لتفادي خطأ HTTP 404 في الأندرويد
     return jsonify({
         'status': 'success',
         'data': {'current_season': 1, 'seasons': [], 'episodes': []},
@@ -644,17 +643,13 @@ def get_series_details():
 
 
 # ==============================================================================
-
-# 6. مسار تفاصيل الفيلم (Movie Details) — يعتمد على TMDB
+# 5. مسار تفاصيل الفيلم (Movie Details)
 # ==============================================================================
 
 
 @app.route('/api/movie-details', methods=['GET'])
 def get_movie_details():
-    """جلب تفاصيل الفيلم من TMDB (الوصف، الطاقم، الفيديوهات).
-
-    يُستخدم عند الحاجة لعرض معلومات إضافية في شاشة التفاصيل.
-    """
+    """جلب تفاصيل الفيلم من TMDB"""
     tmdb_id = request.args.get('id', '').strip()
     title = request.args.get('title', '').strip()
 
@@ -662,7 +657,6 @@ def get_movie_details():
     if tmdb_id and tmdb_id.isdigit():
         clean_id = tmdb_id
     elif title:
-        # البحث عن TMDB ID بالعنوان
         try:
             search_url = f'{TMDB_BASE_URL}/search/movie?api_key={TMDB_API_KEY}&query={quote(title)}&language=ar-SA'
             res = requests.get(search_url, headers=TMDB_HEADERS, timeout=4)
