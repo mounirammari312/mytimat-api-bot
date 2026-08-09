@@ -165,11 +165,25 @@ def get_config():
         'version': '6.3.0',
         'providers': [
             {
-                 'name': 'cinejoy',
-                'domain': 'https://downloads.shegu.st',
-                'search_path': '/movie/{tmdb_id}',
-                'tmdb_mode': True,
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|mkv)[^\s"\'<>]*|https?://[^\s"\'<>]*r2\.cloudflarestorage[^\s"\'<>]*',
+                    
+                'name': 'akwam',
+                'domain': AKWAM_BASE_DOMAIN,
+                'search_path': '/search?q={query}',
+                'movie_selector': 'a[href*=/movie/]',
+                'series_selector': 'a[href*=/series/]',
+                'ep_selector': 'a[href*=/episode/]',
+                'watch_selector': 'a[href*=/watch/], a.link-btn',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
+                'requires_unpack': False,
+            },
+            {
+                'name': 'larroza',
+                'domain': LARROZA_BASE_DOMAIN,
+                'search_path': '/search.php?keywords={query}',
+                'card_selector': 'a[href*=video.php]',
+                'iframe_selector': 'iframe',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+                'requires_unpack': True,
             
             },
             
