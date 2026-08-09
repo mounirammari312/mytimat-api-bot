@@ -174,11 +174,19 @@ def get_config():
                             
                 
                 
-    'name': 'cinejoy',
-    'domain': 'https://cinejoy.to',
-    'search_path': '/search?q={query}',
-    'tmdb_mode': True,  # ← هذا يفعّل SPA scraper
-    'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+    
+  "name": "cinejoy",
+  "domain": "https://downloads.shegu.st",
+  "movie_path": "/movie/{tmdb_id}",
+  "tmdb_mode": true,
+  "headers": {
+    "Origin": "https://cinejoy.to",
+    "Referer": "https://cinejoy.to/",
+    "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+  },
+  "link_regex": "https?://[^\s\"'<>]+\\.(?:m3u8|mp4|mkv)[^\s\"'<>]*|https?://[^\s\"'<>]*r2\\.cloudflarestorage[^\s\"'<>]*"
+
+
 
 
 
