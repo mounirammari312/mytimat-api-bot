@@ -271,7 +271,7 @@ def get_config():
 
 @app.route('/api/home', methods=['GET'])
 def get_home():
-    cached = get_cached('home_data')
+    cached = get_cached('home_data_v3')
     if cached is not None:
         return jsonify(cached)
 
@@ -432,7 +432,7 @@ def get_home():
             'data': sections_list
         }
 
-        set_cached('home_data', result)
+        set_cached('home_data_v3', result)
         return jsonify(result)
 
     except Exception as e:
