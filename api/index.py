@@ -1,7 +1,8 @@
 from urllib.parse import quote, unquote, urlparse
 from bs4 import BeautifulSoup
-from flask import Flask, jsonify, request, make_response
+from flask import Flask, jsonify, request
 import requests
+import json
 import re
 
 # ==============================================================================
@@ -12,6 +13,44 @@ app = Flask(__name__)
 
 TMDB_API_KEY = '65687d1e167bc35f38ee0c88c3a37b74'
 TMDB_BASE_URL = 'https://api.themoviedb.org/3'
+
+# ==============================================================================
+# ⚡ Upstash Redis Configuration (ضع بياناتك هنا)
+# ==============================================================================
+
+UPSTASH_REDIS_REST_URL = "https://immortal-redfish-188577.upstash.io"
+UPSTASH_REDIS_REST_TOKEN = "gQAAAAAAAuChAAIgcDI2MGIzYmQwZTdhYTQ0Y2MxYjFmZTU1YjU2ZGMyNGI0Mw"
+CACHE_TTL_SECONDS = 6 * 3600  # مدة حفظ الكاش: 6 ساعات
+
+
+def get_cached(key):
+    """استرجاع النتيجة من Upstash Redis عبر REST API."""
+    if not UPSTASH_REDIS_REST_URL or "YOUR-DATABASE" in UPSTASH_REDIS_REST_URL:
+        return None
+    try:
+        headers = {"Authorization": f"Bearer {UPSTASH_REDIS_REST_TOKEN}"}
+        payload = ["GET", key]
+        res = requests.post(UPSTASH_REDIS_REST_URL, json=payload, headers=headers, timeout=2)
+        if res.status_code == 200:
+            raw_data = res.json().get("result")
+            if raw_data:
+                return json.loads(raw_data)
+    except Exception as e:
+        print(f"⚠️ Upstash Redis GET Error: {e}")
+    return None
+
+
+def set_cached(key, data, ttl=CACHE_TTL_SECONDS):
+    """حفظ النتيجة في Upstash Redis مع تحديد زمن الصلاحية TTL."""
+    if not UPSTASH_REDIS_REST_URL or "YOUR-DATABASE" in UPSTASH_REDIS_REST_URL:
+        return
+    try:
+        headers = {"Authorization": f"Bearer {UPSTASH_REDIS_REST_TOKEN}"}
+        payload = ["SET", key, json.dumps(data), "EX", ttl]
+        requests.post(UPSTASH_REDIS_REST_URL, json=payload, headers=headers, timeout=2)
+    except Exception as e:
+        print(f"⚠️ Upstash Redis SET Error: {e}")
+
 
 TMDB_HEADERS = {
     'User-Agent': (
@@ -25,14 +64,8 @@ LARROZA_BASE_DOMAIN = 'https://larroza.mom'
 
 
 # ==============================================================================
-# دالة مساعدة لإضافة ترويسات الكاش لـ Vercel CDN (6 ساعات)
+# 1. اكتشاف دومين أكوام النشط تلقائياً
 # ==============================================================================
-
-def cached_json_response(data_dict, max_age_seconds=21600):
-    """تغليف الـ JSON مع ترويسات Cache-Control لحفظ الاستجابة في Vercel CDN Edge."""
-    res = make_response(jsonify(data_dict))
-    res.headers['Cache-Control'] = f'public, max-age={max_age_seconds}, s-maxage={max_age_seconds}, stale-while-revalidate=3600'
-    return res
 
 
 def safe_url(url):
@@ -136,7 +169,7 @@ def parse_akwam_cards(soup):
 
 
 # ==============================================================================
-# 3. مسارات الـ API مع Vercel Edge Caching
+# 3. مسارات الـ API مع Upstash Redis Cache
 # ==============================================================================
 
 
@@ -144,20 +177,20 @@ def parse_akwam_cards(soup):
 def index():
     return jsonify({
         'status': 'online',
-        'mode': 'JSON Rules Engine Full Backend',
+        'mode': 'JSON Rules Engine + Upstash Redis Cache',
         'active_domains': {
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '9.1.0-VercelEdge',
+        'version': '9.2.0-Redis',
     })
 
 
 @app.route('/api/config', methods=['GET'])
 def get_config():
-    return cached_json_response({
+    return jsonify({
         'status': 'success',
-        'version': '9.1.0-VercelEdge',
+        'version': '9.2.0-Redis',
         'providers': [
             {
                 'name': 'akwam',
@@ -197,6 +230,11 @@ def get_config():
 
 @app.route('/api/home', methods=['GET'])
 def get_home():
+    # 1. القراءة من Redis
+    cached = get_cached('home_data')
+    if cached is not None:
+        return jsonify(cached)
+
     try:
         trending_movies = []
         trending_tv = []
@@ -306,8 +344,9 @@ def get_home():
             ],
         }
 
-        # إرجاع مع Vercel CDN Cache
-        return cached_json_response(result)
+        # 2. الحفظ في Redis
+        set_cached('home_data', result)
+        return jsonify(result)
 
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -317,6 +356,12 @@ def get_home():
 def get_catalog():
     cat_type = request.args.get('type', 'movies').lower()
     page = request.args.get('page', '1')
+
+    cache_key = f'catalog:{cat_type}:{page}'
+    cached = get_cached(cache_key)
+    if cached is not None:
+        return jsonify(cached)
+
     section = request.args.get('section', '')
     category = request.args.get('category', '')
     year = request.args.get('year', '')
@@ -368,7 +413,8 @@ def get_catalog():
             },
         }
 
-        return cached_json_response(result)
+        set_cached(cache_key, result)
+        return jsonify(result)
 
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -379,6 +425,11 @@ def search():
     query = request.args.get('q', '')
     if not query:
         return jsonify({'status': 'error', 'message': 'Query missing'}), 400
+
+    cache_key = f'search:{query.lower().strip()}'
+    cached = get_cached(cache_key)
+    if cached is not None:
+        return jsonify(cached)
 
     try:
         search_url = f'{TMDB_BASE_URL}/search/multi?api_key={TMDB_API_KEY}&query={quote(query)}&language=ar-SA'
@@ -420,7 +471,8 @@ def search():
                 })
 
         result = {'status': 'success', 'data': items}
-        return cached_json_response(result)
+        set_cached(cache_key, result)
+        return jsonify(result)
 
     except Exception as e:
         print(f"⚠️ Search Error: {e}")
@@ -434,6 +486,11 @@ def get_series_details():
     title = request.args.get('title', '').strip()
     orig_title = request.args.get('original_title', '').strip()
     selected_season = request.args.get('season', '1').strip()
+
+    cache_key = f'series:{tmdb_id or series_url}:{selected_season}'
+    cached = get_cached(cache_key)
+    if cached is not None:
+        return jsonify(cached)
 
     clean_tmdb_id = None
     if tmdb_id and tmdb_id.isdigit():
@@ -475,10 +532,12 @@ def get_series_details():
                         episodes.append({'title': ep.get_text(strip=True), 'url': ep_href})
 
                 if episodes or seasons:
-                    return cached_json_response({
+                    res_data = {
                         'status': 'success',
                         'data': {'seasons': seasons, 'episodes': episodes},
-                    })
+                    }
+                    set_cached(cache_key, res_data)
+                    return jsonify(res_data)
         except Exception as e:
             print(f'⚠️ Akwam Direct Series Error: {e}')
 
@@ -537,10 +596,12 @@ def get_series_details():
                             episodes.append({'title': ep.get_text(strip=True), 'url': ep_href})
 
                     if episodes or seasons:
-                        return cached_json_response({
+                        res_data = {
                             'status': 'success',
                             'data': {'seasons': seasons, 'episodes': episodes},
-                        })
+                        }
+                        set_cached(cache_key, res_data)
+                        return jsonify(res_data)
         except Exception as e:
             print(f'⚠️ Akwam Search Resolution Error: {e}')
 
@@ -582,14 +643,16 @@ def get_series_details():
                     ),
                 })
 
-            return cached_json_response({
+            res_data = {
                 'status': 'success',
                 'data': {
                     'current_season': season_num,
                     'seasons': seasons,
                     'episodes': episodes,
                 },
-            })
+            }
+            set_cached(cache_key, res_data)
+            return jsonify(res_data)
         except Exception as tmdb_err:
             print(f'⚠️ TMDB Series Season Switch Error: {tmdb_err}')
 
@@ -604,6 +667,11 @@ def get_series_details():
 def get_movie_details():
     tmdb_id = request.args.get('id', '').strip()
     title = request.args.get('title', '').strip()
+
+    cache_key = f'movie:{tmdb_id or title}'
+    cached = get_cached(cache_key)
+    if cached is not None:
+        return jsonify(cached)
 
     clean_id = None
     if tmdb_id and tmdb_id.isdigit():
@@ -633,7 +701,7 @@ def get_movie_details():
             return jsonify({'status': 'success', 'data': None})
 
         data = res.json()
-        return cached_json_response({
+        result = {
             'status': 'success',
             'data': {
                 'id': str(data.get('id', '')),
@@ -663,7 +731,10 @@ def get_movie_details():
                     for v in data.get('videos', {}).get('results', [])[:5]
                 ],
             },
-        })
+        }
+
+        set_cached(cache_key, result)
+        return jsonify(result)
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
