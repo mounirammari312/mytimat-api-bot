@@ -1,3 +1,4 @@
+
 from urllib.parse import quote, unquote, urlparse
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
@@ -15,12 +16,12 @@ TMDB_API_KEY = '65687d1e167bc35f38ee0c88c3a37b74'
 TMDB_BASE_URL = 'https://api.themoviedb.org/3'
 
 # ==============================================================================
-# ⚡ Upstash Redis Configuration (ضع بياناتك هنا)
+# ⚡ Upstash Redis Configuration
 # ==============================================================================
 
 UPSTASH_REDIS_REST_URL = "https://immortal-redfish-188577.upstash.io"
 UPSTASH_REDIS_REST_TOKEN = "gQAAAAAAAuChAAIgcDI2MGIzYmQwZTdhYTQ0Y2MxYjFmZTU1YjU2ZGMyNGI0Mw"
-CACHE_TTL_SECONDS = 6 * 3600  # مدة حفظ الكاش: 6 ساعات
+CACHE_TTL_SECONDS = 6 * 3600  # 6 ساعات
 
 
 def get_cached(key):
@@ -30,11 +31,13 @@ def get_cached(key):
     try:
         headers = {"Authorization": f"Bearer {UPSTASH_REDIS_REST_TOKEN}"}
         payload = ["GET", key]
-        res = requests.post(UPSTASH_REDIS_REST_URL, json=payload, headers=headers, timeout=2)
+        res = requests.post(UPSTASH_REDIS_REST_URL, json=payload, headers=headers, timeout=5)
         if res.status_code == 200:
             raw_data = res.json().get("result")
             if raw_data:
                 return json.loads(raw_data)
+        else:
+            print(f"⚠️ Upstash GET Status Code: {res.status_code} - Response: {res.text}")
     except Exception as e:
         print(f"⚠️ Upstash Redis GET Error: {e}")
     return None
@@ -47,7 +50,9 @@ def set_cached(key, data, ttl=CACHE_TTL_SECONDS):
     try:
         headers = {"Authorization": f"Bearer {UPSTASH_REDIS_REST_TOKEN}"}
         payload = ["SET", key, json.dumps(data), "EX", ttl]
-        requests.post(UPSTASH_REDIS_REST_URL, json=payload, headers=headers, timeout=2)
+        res = requests.post(UPSTASH_REDIS_REST_URL, json=payload, headers=headers, timeout=5)
+        if res.status_code != 200:
+            print(f"⚠️ Upstash SET Status Code: {res.status_code} - Response: {res.text}")
     except Exception as e:
         print(f"⚠️ Upstash Redis SET Error: {e}")
 
@@ -169,7 +174,7 @@ def parse_akwam_cards(soup):
 
 
 # ==============================================================================
-# 3. مسارات الـ API مع Upstash Redis Cache
+# 3. مسارات الـ API مسار التشخيص
 # ==============================================================================
 
 
@@ -182,15 +187,49 @@ def index():
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '9.2.0-Redis',
+        'version': '9.2.1-RedisDebug',
     })
+
+
+@app.route('/api/test-redis', methods=['GET'])
+def test_redis_debug():
+    """مسار فحص وتحديد أخطاء الاتصال بـ Upstash Redis مباشرة"""
+    try:
+        headers = {"Authorization": f"Bearer {UPSTASH_REDIS_REST_TOKEN}"}
+        
+        # 1. تجربة كتابة بيانات
+        set_res = requests.post(
+            UPSTASH_REDIS_REST_URL,
+            json=["SET", "debug_test_key", "hello_redis", "EX", 60],
+            headers=headers,
+            timeout=5
+        )
+        
+        # 2. تجربة قراءة بيانات
+        get_res = requests.post(
+            UPSTASH_REDIS_REST_URL,
+            json=["GET", "debug_test_key"],
+            headers=headers,
+            timeout=5
+        )
+        
+        return jsonify({
+            "target_url": UPSTASH_REDIS_REST_URL,
+            "set_status_code": set_res.status_code,
+            "set_response": set_res.json() if set_res.status_code == 200 else set_res.text,
+            "get_status_code": get_res.status_code,
+            "get_response": get_res.json() if get_res.status_code == 200 else get_res.text,
+            "connection_successful": (set_res.status_code == 200 and get_res.status_code == 200)
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "exception_message": str(e)}), 500
 
 
 @app.route('/api/config', methods=['GET'])
 def get_config():
     return jsonify({
         'status': 'success',
-        'version': '9.2.0-Redis',
+        'version': '9.2.1-RedisDebug',
         'providers': [
             {
                 'name': 'akwam',
@@ -230,7 +269,6 @@ def get_config():
 
 @app.route('/api/home', methods=['GET'])
 def get_home():
-    # 1. القراءة من Redis
     cached = get_cached('home_data')
     if cached is not None:
         return jsonify(cached)
@@ -344,7 +382,6 @@ def get_home():
             ],
         }
 
-        # 2. الحفظ في Redis
         set_cached('home_data', result)
         return jsonify(result)
 
@@ -741,4 +778,3 @@ def get_movie_details():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
-
