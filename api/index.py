@@ -210,18 +210,19 @@ def get_config():
         'status': 'success',
         'version': '9.3.0-Production',
         'providers': [
-
 {
     'name': 'qfilm',
-    'domain': 'https://a.qfilm.tv',
+    'domain': '[https://a.qfilm.tv](https://a.qfilm.tv)',
     'search_path': '/search.php?keywords={query}',
-    'card_selector': 'a[href*=video.php], a[href*=watch.php]',
-    'movie_selector': 'a[href*=video.php], a[href*=watch.php]',
+    'card_selector': 'a[href*=watch.php], a[href*=video.php]',
+    'movie_selector': 'a[href*=watch.php], a[href*=video.php]',
     'series_selector': 'a[href*=series.php]',
     'iframe_selector': 'iframe',
     'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-    'requires_unpack': True,
+    'ajax_required': True,
+    'requires_unpack': False,
 },
+
 
 
     
