@@ -161,7 +161,7 @@ def parse_akwam_cards(soup):
 
 
 # ==============================================================================
-# 2. مسارات التشخيص والإعدادات
+# 2. مسارات التشخيص والإعدادات (مع كافة المزودين ومحدد QFilm الدقيق)
 # ==============================================================================
 
 @app.route('/', methods=['GET'])
@@ -173,7 +173,7 @@ def index():
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '9.3.0-Production',
+        'version': '9.4.0-Production',
     })
 
 
@@ -208,41 +208,32 @@ def test_redis_debug():
 def get_config():
     return jsonify({
         'status': 'success',
-        'version': '9.3.0-Production',
+        'version': '9.4.0-Production',
         'providers': [
-{
-    'name': 'qfilm',
-    'domain': 'https://a.qfilm.tv',
-    'search_path': '/search.php?keywords={query}',
-    'card_selector': 'a[href*="watch.php"], a[href*="video.php"], .item a, .film-item a, .movie-item a',
-    'movie_selector': 'a[href*="watch.php"], a[href*="video.php"]',
-    'series_selector': 'a[href*="series.php"], a[href*="watch.php"]',
-    'iframe_selector': 'iframe',
-    'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-    'ajax_required': True,
-    'requires_unpack': False,
-},
-
-
-
-
-    
-
-
             
-            
-            
+            {
+                'name': 'qfilm',
+                'domain': 'https://a.qfilm.tv',
+                'search_path': '/search.php?keywords={query}',
+                'card_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"], .pm-search-results a[href*="watch.php"]',
+                'movie_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"]',
+                'series_selector': 'a[href*="series.php"], a[href*="watch.php"]',
+                'iframe_selector': 'iframe',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+                'ajax_required': True,
+                'requires_unpack': False,
+            },
         ],
     })
 
 
 # ==============================================================================
-# 3. مسار الرئيسية (4 أقسام + حل مشكلة البحث بالاسم الأصلي)
+# 3. مسار الرئيسية (4 أقسام + الاعتماد على الاسم الأصلي أولاً)
 # ==============================================================================
 
 @app.route('/api/home', methods=['GET'])
 def get_home():
-    CACHE_KEY = 'home_data_v5'
+    CACHE_KEY = 'home_data_v6'
     cached = get_cached(CACHE_KEY)
     if cached is not None:
         return jsonify(cached)
@@ -520,7 +511,8 @@ def search():
                 sources = {
                     'akwam': f"{AKWAM_BASE_DOMAIN}/search?q={quote(search_target)}",
                     'larroza': f"{LARROZA_BASE_DOMAIN}/search.php?keywords={quote(search_target)}",
-                    'moviz-time': f"https://moviz-time.site/?s={quote(search_target)}"
+                    'moviz-time': f"https://moviz-time.site/?s={quote(search_target)}",
+                    'qfilm': f"https://a.qfilm.tv/search.php?keywords={quote(search_target)}"
                 }
 
                 items.append({
