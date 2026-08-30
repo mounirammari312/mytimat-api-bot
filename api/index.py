@@ -210,38 +210,26 @@ def get_config():
         'status': 'success',
         'version': '9.3.0-Production',
         'providers': [
+
+{
+    'name': 'qfilm',
+    'domain': 'https://a.qfilm.tv',
+    'search_path': '/search.php?keywords={query}',
+    'card_selector': 'a[href*=video.php], a[href*=watch.php]',
+    'movie_selector': 'a[href*=video.php], a[href*=watch.php]',
+    'series_selector': 'a[href*=series.php]',
+    'iframe_selector': 'iframe',
+    'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+    'requires_unpack': True,
+},
+
+
+    
+
+
+            
             {
-                'name': 'akwam',
-                'domain': AKWAM_BASE_DOMAIN,
-                'search_path': '/search?q={query}',
-                'movie_selector': 'a[href*=/movie/]',
-                'series_selector': 'a[href*=/series/]',
-                'ep_selector': 'a[href*=/episode/]',
-                'watch_selector': 'a[href*=/watch/], a.link-btn',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
-                'requires_unpack': False,
-            },
-            {
-                'name': 'larroza',
-                'domain': LARROZA_BASE_DOMAIN,
-                'search_path': '/search.php?keywords={query}',
-                'card_selector': 'a[href*=video.php]',
-                'iframe_selector': 'iframe',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-                'requires_unpack': True,
-            },
-            {
-                'name': 'moviz-time',
-                'domain': 'https://moviz-time.site',
-                'search_path': '/?s={query}',
-                'card_selector': 'a[href*="/watch/"], a[href*="/series/"], article.post a',
-                'watch_selector': 'iframe, [data-link], [data-url], [data-post], .single_tab, .play-btn, .server-item',
-                'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link]',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
-                'requires_unpack': True,
-                'ajax_required': True,
-                'series_selector': 'a[href*="/series/"]'
-            },
+            
         ],
     })
 
