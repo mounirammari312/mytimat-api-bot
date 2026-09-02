@@ -224,7 +224,7 @@ def get_config():
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'tmdb_mode': True,
                 'requires_unpack': True,
-                'ajax_required': False,
+                'ajax_required': True,
                 'extractor_script': r"""
                     (function() {
                         // 1. البحث عن روابط m3u8 أو mp4 مباشرة في كود الصفحة
