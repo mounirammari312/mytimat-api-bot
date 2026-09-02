@@ -3,34 +3,23 @@ from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
 import requests
 import json
-import re
-
-# ==============================================================================
-# 🛠️ إعدادات التطبيق والسيرفر الرئيسي (Vercel Entrypoint)
-# ==============================================================================
 
 app = Flask(__name__)
 
 TMDB_API_KEY = '65687d1e167bc35f38ee0c88c3a37b74'
 TMDB_BASE_URL = 'https://api.themoviedb.org/3'
 
-# ==============================================================================
-# ⚡ Upstash Redis Configuration
-# ==============================================================================
-
 UPSTASH_REDIS_REST_URL = "https://immortal-redfish-188577.upstash.io"
 UPSTASH_REDIS_REST_TOKEN = "gQAAAAAAAuChAAIgcDI2MGIzYmQwZTdhYTQ0Y2MxYjFmZTU1YjU2ZGMyNGI0Mw"
-CACHE_TTL_SECONDS = 6 * 3600  # 6 ساعات صلاحية الكاش
+CACHE_TTL_SECONDS = 6 * 3600
 
 
 def get_cached(key):
-    """استرجاع النتيجة من Upstash Redis عبر REST API."""
     if not UPSTASH_REDIS_REST_URL or "YOUR-DATABASE" in UPSTASH_REDIS_REST_URL:
         return None
     try:
         headers = {"Authorization": f"Bearer {UPSTASH_REDIS_REST_TOKEN}"}
-        payload = ["GET", key]
-        res = requests.post(UPSTASH_REDIS_REST_URL, json=payload, headers=headers, timeout=3)
+        res = requests.post(UPSTASH_REDIS_REST_URL, json=["GET", key], headers=headers, timeout=3)
         if res.status_code == 200:
             raw_data = res.json().get("result")
             if raw_data:
@@ -41,31 +30,22 @@ def get_cached(key):
 
 
 def set_cached(key, data, ttl=CACHE_TTL_SECONDS):
-    """حفظ النتيجة في Upstash Redis مع تحديد زمن الصلاحية TTL."""
     if not UPSTASH_REDIS_REST_URL or "YOUR-DATABASE" in UPSTASH_REDIS_REST_URL:
         return
     try:
         headers = {"Authorization": f"Bearer {UPSTASH_REDIS_REST_TOKEN}"}
-        payload = ["SET", key, json.dumps(data), "EX", ttl]
-        requests.post(UPSTASH_REDIS_REST_URL, json=payload, headers=headers, timeout=3)
+        requests.post(UPSTASH_REDIS_REST_URL, json=["SET", key, json.dumps(data), "EX", ttl], headers=headers, timeout=3)
     except Exception as e:
         print(f"⚠️ Upstash Redis SET Error: {e}")
 
 
 TMDB_HEADERS = {
-    'User-Agent': (
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-        '(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-    ),
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     'Accept': 'application/json',
 }
 
 LARROZA_BASE_DOMAIN = 'https://larroza.mom'
 
-
-# ==============================================================================
-# 1. اكتشاف دومين أكوام النشط تلقائياً
-# ==============================================================================
 
 def safe_url(url):
     return quote(url, safe=':/?&=#%') if url else url
@@ -73,12 +53,7 @@ def safe_url(url):
 
 def get_active_akwam_domain():
     try:
-        res = requests.get(
-            'https://ak.sv/',
-            headers=TMDB_HEADERS,
-            timeout=3,
-            allow_redirects=True,
-        )
+        res = requests.get('https://ak.sv/', headers=TMDB_HEADERS, timeout=3, allow_redirects=True)
         parsed = urlparse(res.url)
         return f'{parsed.scheme}://{parsed.netloc}'
     except Exception:
@@ -90,10 +65,7 @@ AKWAM_BASE_DOMAIN = get_active_akwam_domain()
 
 def get_akwam_headers(referer_url=None):
     ref = safe_url(referer_url) if referer_url else f'{AKWAM_BASE_DOMAIN}/'
-    return {
-        'User-Agent': TMDB_HEADERS['User-Agent'],
-        'Referer': ref,
-    }
+    return {'User-Agent': TMDB_HEADERS['User-Agent'], 'Referer': ref}
 
 
 def format_poster(poster_path):
@@ -105,9 +77,7 @@ def format_backdrop(backdrop_path):
 
 
 def parse_akwam_cards(soup):
-    card_containers = soup.select(
-        'div.widget-body div.col-lg-2, div.widget-body div.col-md-3, div.entry-box'
-    )
+    card_containers = soup.select('div.widget-body div.col-lg-2, div.widget-body div.col-md-3, div.entry-box')
     items = []
     seen_urls = set()
 
@@ -115,31 +85,20 @@ def parse_akwam_cards(soup):
         link_el = card.select_one('a[href*="/movie/"], a[href*="/series/"]')
         if not link_el:
             continue
-
         href = link_el['href']
         if not href.startswith('http'):
             href = f"{AKWAM_BASE_DOMAIN}/{href.lstrip('/')}"
-
         if href in seen_urls:
             continue
         seen_urls.add(href)
 
         title_el = card.select_one('h3.entry-title, .entry-title, h3, a.entry-title')
         img_el = card.select_one('img')
-
-        title = 'غير متوفر'
-        if title_el and title_el.get_text(strip=True):
-            title = title_el.get_text(strip=True)
-        elif img_el and img_el.get('alt'):
-            title = img_el['alt']
+        title = title_el.get_text(strip=True) if title_el and title_el.get_text(strip=True) else (img_el.get('alt') if img_el else 'غير متوفر')
 
         poster_url = ''
         if img_el:
-            poster_url = (
-                img_el.get('data-src') or img_el.get('data-lazy') or img_el.get('src')
-            )
-            if poster_url and 'placeholder.png' in poster_url:
-                poster_url = img_el.get('data-src') or poster_url
+            poster_url = img_el.get('data-src') or img_el.get('data-lazy') or img_el.get('src') or ''
 
         badge_els = card.select('span.badge, div.badge, span.quality')
         badges = [b.get_text(strip=True) for b in badge_els if b.get_text(strip=True)]
@@ -156,13 +115,8 @@ def parse_akwam_cards(soup):
             'rating': 0.0,
             'type': media_type,
         })
-
     return items
 
-
-# ==============================================================================
-# 2. مسارات التشخيص والإعدادات
-# ==============================================================================
 
 @app.route('/', methods=['GET'])
 def index():
@@ -177,63 +131,49 @@ def index():
     })
 
 
-@app.route('/api/test-redis', methods=['GET'])
-def test_redis_debug():
-    """مسار فحص وتحديد أخطاء الاتصال بـ Upstash Redis مباشرة"""
-    try:
-        headers = {"Authorization": f"Bearer {UPSTASH_REDIS_REST_TOKEN}"}
-        set_res = requests.post(
-            UPSTASH_REDIS_REST_URL,
-            json=["SET", "debug_test_key", "hello_redis", "EX", 60],
-            headers=headers,
-            timeout=3
-        )
-        get_res = requests.post(
-            UPSTASH_REDIS_REST_URL,
-            json=["GET", "debug_test_key"],
-            headers=headers,
-            timeout=3
-        )
-        return jsonify({
-            "target_url": UPSTASH_REDIS_REST_URL,
-            "set_status_code": set_res.status_code,
-            "get_status_code": get_res.status_code,
-            "connection_successful": (set_res.status_code == 200 and get_res.status_code == 200)
-        })
-    except Exception as e:
-        return jsonify({"status": "error", "exception_message": str(e)}), 500
-
-
 @app.route('/api/config', methods=['GET'])
 def get_config():
+    """إرسال قواعد المزودات لتطبيق الأندرويد ليتولى كشطها محلياً"""
     return jsonify({
         'status': 'success',
         'version': '9.10.0-Production',
         'providers': [
             {
-                'name': 'flaxfer_hd',
-                'domain': 'https://mytimat-api-bot.vercel.app',
-                'search_path': '/api/source?id={tmdb_id}',
+                'name': 'netplayz',
+                'domain': 'https://netplayz.icu',
+                'search_path': '/watch?type=movie&id={tmdb_id}',
                 'card_selector': '',
                 'movie_selector': '',
                 'series_selector': '',
                 'watch_selector': '',
-                'iframe_selector': '',
+                'iframe_selector': 'iframe',
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'tmdb_mode': True,
-                'requires_unpack': False,
-                'ajax_required': False
+                'requires_unpack': True,
+                'ajax_required': True,
+                'extractor_script': r"""
+                    (function() {
+                        var directMatch = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
+                        if (directMatch) {
+                            return { url: directMatch[0], referer: __PAGE_URL__, quality: '1080p Clean' };
+                        }
+                        var fileMatch = __HTML__.match(/(?:file|source|src)\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
+                        if (fileMatch) {
+                            return { url: fileMatch[1], referer: __PAGE_URL__, quality: '1080p Clean' };
+                        }
+                        var iframeSrc = __HTML__.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+                        if (iframeSrc && iframeSrc[1].startsWith('http')) {
+                            return { url: iframeSrc[1], referer: __PAGE_URL__, quality: 'Embed' };
+                        }
+                        return null;
+                    })();
+                """
             }
         ],
     })
 
 
-# ==============================================================================
-# 3. مسار الرئيسية (Server-Driven UI الديناميكي)
-# ==============================================================================
-
 def fetch_tmdb_discover(endpoint_path, query_params, media_type, default_tag='TMDB', limit=10):
-    """دالة مساعدة موحدة لجلب وتنسيق بطاقات TMDB لأي قسم جديد في سطرين."""
     url = f"{TMDB_BASE_URL}/{endpoint_path}?api_key={TMDB_API_KEY}&language=ar-SA&{query_params}"
     try:
         res = requests.get(url, headers=TMDB_HEADERS, timeout=2.5)
@@ -242,12 +182,10 @@ def fetch_tmdb_discover(endpoint_path, query_params, media_type, default_tag='TM
             for item in res.json().get('results', [])[:limit]:
                 if not item.get('poster_path'):
                     continue
-
                 title = item.get('title') or item.get('name') or item.get('original_title') or item.get('original_name', '')
                 orig_title = item.get('original_title') or item.get('original_name', '')
                 release_date = item.get('release_date') or item.get('first_air_date', '')
                 year = str(release_date)[:4] if release_date else ''
-
                 search_query = quote(orig_title if orig_title else title)
 
                 items.append({
@@ -263,7 +201,7 @@ def fetch_tmdb_discover(endpoint_path, query_params, media_type, default_tag='TM
                 })
             return items
     except Exception as e:
-        print(f"⚠️ TMDB Discover Error ({endpoint_path}): {e}")
+        print(f"⚠️ TMDB Discover Error: {e}")
     return []
 
 
@@ -275,255 +213,20 @@ def get_home():
         return jsonify(cached)
 
     try:
-        sections_list = []
-
-        trending_movies = fetch_tmdb_discover('trending/movie/week', '', 'movie', '🔥 رائج')
-        if not trending_movies:
-            res_m = requests.get(f'{AKWAM_BASE_DOMAIN}/movies', headers=get_akwam_headers(), timeout=3)
-            soup_m = BeautifulSoup(res_m.text, 'html.parser')
-            trending_movies = parse_akwam_cards(soup_m)[:10]
-
-        sections_list.append({
-            'key': 'trending_movies',
-            'title': '🔥 الأفلام الأكثر شهرة',
-            'has_see_all': True,
-            'see_all_params': {'type': 'movies', 'page': 1},
-            'items': trending_movies,
-        })
-
-        trending_tv = fetch_tmdb_discover('trending/tv/week', '', 'tv', '📺 مسلسلات')
-        if not trending_tv:
-            res_t = requests.get(f'{AKWAM_BASE_DOMAIN}/series', headers=get_akwam_headers(), timeout=3)
-            soup_t = BeautifulSoup(res_t.text, 'html.parser')
-            trending_tv = parse_akwam_cards(soup_t)[:10]
-
-        sections_list.append({
-            'key': 'trending_tv',
-            'title': '📺 المسلسلات الأكثر مشاهدة',
-            'has_see_all': True,
-            'see_all_params': {'type': 'series', 'page': 1},
-            'items': trending_tv,
-        })
-
-        action_movies = fetch_tmdb_discover(
-            'discover/movie',
-            'with_genres=28&sort_by=popularity.desc&vote_count.gte=100',
-            'movie',
-            '💥 أكشن'
-        )
-        if action_movies:
-            sections_list.append({
-                'key': 'action_movies',
-                'title': '💥 أفلام الحركة والإثارة',
-                'has_see_all': False,
-                'see_all_params': {},
-                'items': action_movies,
-            })
-
-        animation_movies = fetch_tmdb_discover(
-            'discover/movie',
-            'with_genres=16,10751&sort_by=popularity.desc&vote_count.gte=50',
-            'movie',
-            '🎨 أنمي'
-        )
-        if animation_movies:
-            sections_list.append({
-                'key': 'animation_movies',
-                'title': '🎨 روائع الأنمي والكرتون',
-                'has_see_all': False,
-                'see_all_params': {},
-                'items': animation_movies,
-            })
-
-        korean_drama = fetch_tmdb_discover(
-            'discover/tv',
-            'with_original_language=ko&sort_by=popularity.desc&vote_count.gte=20',
-            'tv',
-            '🇰🇷 كوري'
-        )
-        if korean_drama:
-            sections_list.append({
-                'key': 'korean_drama',
-                'title': '🇰🇷 الدراما والمسلسلات الكورية',
-                'has_see_all': False,
-                'see_all_params': {},
-                'items': korean_drama,
-            })
-
-        top_rated_movies = fetch_tmdb_discover(
-            'movie/top_rated',
-            'vote_count.gte=500',
-            'movie',
-            '⭐ الأعلى تقييماً'
-        )
-        if top_rated_movies:
-            sections_list.append({
-                'key': 'top_rated_movies',
-                'title': '⭐ سينما النخبة (الأعلى تقييماً)',
-                'has_see_all': False,
-                'see_all_params': {},
-                'items': top_rated_movies,
-            })
-
-        classic_docs = fetch_tmdb_discover(
-            'discover/movie',
-            'with_genres=99&primary_release_date.lte=1995-01-01&sort_by=vote_average.desc&vote_count.gte=10',
-            'movie',
-            '📜 وثائقي'
-        )
-        if classic_docs:
-            sections_list.append({
-                'key': 'classic_docs',
-                'title': '📜 أفلام وثائقية كلاسيكية',
-                'has_see_all': False,
-                'see_all_params': {},
-                'items': classic_docs,
-            })
-
-        result = {
-            'status': 'success',
-            'data': sections_list
-        }
-
+        sections_list = [
+            {'key': 'trending_movies', 'title': '🔥 الأفلام الأكثر شهرة', 'has_see_all': True, 'see_all_params': {'type': 'movies', 'page': 1}, 'items': fetch_tmdb_discover('trending/movie/week', '', 'movie', '🔥 رائج')},
+            {'key': 'trending_tv', 'title': '📺 المسلسلات الأكثر مشاهدة', 'has_see_all': True, 'see_all_params': {'type': 'series', 'page': 1}, 'items': fetch_tmdb_discover('trending/tv/week', '', 'tv', '📺 مسلسلات')},
+            {'key': 'action_movies', 'title': '💥 أفلام الحركة والإثارة', 'has_see_all': False, 'see_all_params': {}, 'items': fetch_tmdb_discover('discover/movie', 'with_genres=28&sort_by=popularity.desc&vote_count.gte=100', 'movie', '💥 أكشن')},
+            {'key': 'animation_movies', 'title': '🎨 روائع الأنمي والكرتون', 'has_see_all': False, 'see_all_params': {}, 'items': fetch_tmdb_discover('discover/movie', 'with_genres=16,10751&sort_by=popularity.desc&vote_count.gte=50', 'movie', '🎨 أنمي')},
+            {'key': 'korean_drama', 'title': '🇰🇷 الدراما والمسلسلات الكورية', 'has_see_all': False, 'see_all_params': {}, 'items': fetch_tmdb_discover('discover/tv', 'with_original_language=ko&sort_by=popularity.desc&vote_count.gte=20', 'tv', '🇰🇷 كوري')},
+            {'key': 'top_rated_movies', 'title': '⭐ سينما النخبة (الأعلى تقييماً)', 'has_see_all': False, 'see_all_params': {}, 'items': fetch_tmdb_discover('movie/top_rated', 'vote_count.gte=500', 'movie', '⭐ الأعلى تقييماً')},
+        ]
+        result = {'status': 'success', 'data': sections_list}
         set_cached(CACHE_KEY, result)
         return jsonify(result)
-
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-
-# ==============================================================================
-# 4. مسار الكتالوج والفلترة
-# ==============================================================================
-
-@app.route('/api/catalog', methods=['GET'])
-def get_catalog():
-    cat_type = request.args.get('type', 'movies').lower()
-    page = request.args.get('page', '1')
-
-    cache_key = f'catalog:{cat_type}:{page}'
-    cached = get_cached(cache_key)
-    if cached is not None:
-        return jsonify(cached)
-
-    section = request.args.get('section', '')
-    category = request.args.get('category', '')
-    year = request.args.get('year', '')
-    quality = request.args.get('quality', '')
-
-    query_params = [f'page={page}']
-    if section:
-        query_params.append(f'section={section}')
-    if category:
-        query_params.append(f'category={category}')
-    if year:
-        query_params.append(f'year={year}')
-    if quality:
-        query_params.append(f'quality={quality}')
-
-    query_string = '&'.join(query_params)
-    catalog_url = safe_url(f'{AKWAM_BASE_DOMAIN}/{cat_type}?{query_string}')
-
-    try:
-        res = requests.get(catalog_url, headers=get_akwam_headers(catalog_url), timeout=4)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        items = parse_akwam_cards(soup)
-
-        page_links = soup.select('ul.pagination a, a.page-link')
-        pages = [p.get_text(strip=True) for p in page_links if p.get_text(strip=True).isdigit()]
-        max_page = max(map(int, pages)) if pages else 1
-
-        result = {
-            'status': 'success',
-            'data': {
-                'type': cat_type,
-                'filters': {
-                    'section': section or 'all',
-                    'category': category or 'all',
-                    'year': year or 'all',
-                    'quality': quality or 'all',
-                },
-                'current_page': int(page),
-                'total_pages': max_page,
-                'has_next_page': int(page) < max_page,
-                'items_count': len(items),
-                'items': items,
-            },
-        }
-
-        set_cached(cache_key, result)
-        return jsonify(result)
-
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
-# ==============================================================================
-# 5. مسار البحث الشامل عبر TMDB
-# ==============================================================================
-
-@app.route('/api/search', methods=['GET'])
-def search():
-    query = request.args.get('q', '')
-    if not query:
-        return jsonify({'status': 'error', 'message': 'Query missing'}), 400
-
-    cache_key = f'search:{query.lower().strip()}'
-    cached = get_cached(cache_key)
-    if cached is not None:
-        return jsonify(cached)
-
-    try:
-        search_url = f'{TMDB_BASE_URL}/search/multi?api_key={TMDB_API_KEY}&query={quote(query)}&language=ar-SA'
-        res = requests.get(search_url, headers=TMDB_HEADERS, timeout=5)
-
-        if res.status_code != 200:
-            return jsonify({'status': 'success', 'data': []})
-
-        items = []
-        for item in res.json().get('results', []):
-            m_type = item.get('media_type')
-            if m_type in ['movie', 'tv']:
-                vote_avg = item.get('vote_average')
-                rating = round(vote_avg, 1) if isinstance(vote_avg, (int, float)) else 0.0
-
-                title = item.get('title') or item.get('name') or item.get('original_title') or 'بدون عنوان'
-                orig_title = item.get('original_name') or item.get('original_title') or ''
-                poster_path = item.get('poster_path')
-
-                search_target = orig_title if orig_title else title
-                sources = {
-                    'akwam': f"{AKWAM_BASE_DOMAIN}/search?q={quote(search_target)}",
-                    'larroza': f"{LARROZA_BASE_DOMAIN}/search.php?keywords={quote(search_target)}",
-                    'moviz-time': f"https://moviz-time.site/?s={quote(search_target)}",
-                    'qfilm': f"https://a.qfilm.tv/search.php?keywords={quote(search_target)}"
-                }
-
-                items.append({
-                    'id': str(item.get('id', '')),
-                    'url': sources['akwam'],
-                    'sources': sources,
-                    'title': title,
-                    'original_title': orig_title,
-                    'poster': format_poster(poster_path),
-                    'backdrop': format_backdrop(item.get('backdrop_path') or poster_path),
-                    'rating': rating,
-                    'tags': ['TMDB'],
-                    'type': m_type,
-                })
-
-        result = {'status': 'success', 'data': items}
-        set_cached(cache_key, result)
-        return jsonify(result)
-
-    except Exception as e:
-        print(f"⚠️ Search Error: {e}")
-        return jsonify({'status': 'success', 'data': []})
-
-
-# ==============================================================================
-# 6. مسار تفاصيل المسلسلات والمواسم والحلقات
-# ==============================================================================
 
 @app.route('/api/series-details', methods=['GET'])
 def get_series_details():
@@ -538,165 +241,37 @@ def get_series_details():
     if cached is not None:
         return jsonify(cached)
 
-    clean_tmdb_id = None
-    if tmdb_id and tmdb_id.isdigit():
-        clean_tmdb_id = tmdb_id
-    elif series_url and series_url.isdigit():
-        clean_tmdb_id = series_url
-
-    if series_url and series_url.startswith('http') and '/series/' in series_url:
-        try:
-            target_url = safe_url(series_url)
-            res = requests.get(target_url, headers=get_akwam_headers(target_url), timeout=4)
-            if res.status_code == 200:
-                soup = BeautifulSoup(res.text, 'html.parser')
-
-                season_links = soup.select('a[href*="/series/"]')
-                seasons = []
-                seen_seasons = set()
-                for s in season_links:
-                    s_href = s['href']
-                    if not s_href.startswith('http'):
-                        s_href = f"{AKWAM_BASE_DOMAIN}/{s_href.lstrip('/')}"
-                    if s_href not in seen_seasons and s_href != series_url:
-                        seen_seasons.add(s_href)
-                        seasons.append({'title': s.get_text(strip=True) or 'موسم', 'url': s_href})
-
-                episode_cards = soup.select('a[href*="/episode/"]')
-                episodes = []
-                seen_episodes = set()
-                for ep in episode_cards:
-                    ep_href = ep['href']
-                    if not ep_href.startswith('http'):
-                        ep_href = f"{AKWAM_BASE_DOMAIN}/{ep_href.lstrip('/')}"
-                    if ep_href not in seen_episodes:
-                        seen_episodes.add(ep_href)
-                        episodes.append({'title': ep.get_text(strip=True), 'url': ep_href})
-
-                if episodes or seasons:
-                    res_data = {
-                        'status': 'success',
-                        'data': {'seasons': seasons, 'episodes': episodes},
-                    }
-                    set_cached(cache_key, res_data)
-                    return jsonify(res_data)
-        except Exception as e:
-            print(f'⚠️ Akwam Direct Series Error: {e}')
-
-    search_term = orig_title or title
-    if not search_term and '/search' in series_url and 'q=' in series_url:
-        try:
-            search_term = unquote(series_url.split('q=')[1].split('&')[0])
-        except Exception:
-            pass
-
-    if search_term:
-        try:
-            search_req_url = f'{AKWAM_BASE_DOMAIN}/search?q={quote(search_term)}'
-            res_search = requests.get(search_req_url, headers=get_akwam_headers(), timeout=4)
-            if res_search.status_code == 200:
-                soup_search = BeautifulSoup(res_search.text, 'html.parser')
-                card = soup_search.select_one('a[href*="/series/"]')
-                if card and card.get('href'):
-                    real_series_url = card['href']
-                    if not real_series_url.startswith('http'):
-                        real_series_url = f"{AKWAM_BASE_DOMAIN}/{real_series_url.lstrip('/')}"
-
-                    res_real = requests.get(safe_url(real_series_url), headers=get_akwam_headers(real_series_url), timeout=4)
-                    soup_real = BeautifulSoup(res_real.text, 'html.parser')
-
-                    season_links = soup_real.select('a[href*="/series/"]')
-                    seasons = []
-                    seen_seasons = set()
-                    for s in season_links:
-                        s_href = s['href']
-                        if not s_href.startswith('http'):
-                            s_href = f"{AKWAM_BASE_DOMAIN}/{s_href.lstrip('/')}"
-                        if s_href not in seen_seasons and s_href != real_series_url:
-                            seen_seasons.add(s_href)
-                            seasons.append({'title': s.get_text(strip=True) or 'موسم', 'url': s_href})
-
-                    episode_cards = soup_real.select('a[href*="/episode/"]')
-                    episodes = []
-                    seen_episodes = set()
-                    for ep in episode_cards:
-                        ep_href = ep['href']
-                        if not ep_href.startswith('http'):
-                            ep_href = f"{AKWAM_BASE_DOMAIN}/{ep_href.lstrip('/')}"
-                        if ep_href not in seen_episodes:
-                            seen_episodes.add(ep_href)
-                            episodes.append({'title': ep.get_text(strip=True), 'url': ep_href})
-
-                    if episodes or seasons:
-                        res_data = {
-                            'status': 'success',
-                            'data': {'seasons': seasons, 'episodes': episodes},
-                        }
-                        set_cached(cache_key, res_data)
-                        return jsonify(res_data)
-        except Exception as e:
-            print(f'⚠️ Akwam Search Resolution Error: {e}')
+    clean_tmdb_id = tmdb_id if tmdb_id.isdigit() else (series_url if series_url.isdigit() else None)
 
     if clean_tmdb_id:
         try:
             tmdb_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}?api_key={TMDB_API_KEY}&language=ar-SA'
             res_tv = requests.get(tmdb_url, headers=TMDB_HEADERS, timeout=4).json()
-
-            seasons = []
-            for s in res_tv.get('seasons', []):
-                s_num = s.get('season_number', 0)
-                if s_num > 0:
-                    seasons.append({
-                        'season_number': s_num,
-                        'title': s.get('name') or f'الموسم {s_num}',
-                        'episode_count': s.get('episode_count', 0),
-                    })
-
+            seasons = [
+                {'season_number': s.get('season_number', 0), 'title': s.get('name') or f"الموسم {s.get('season_number')}", 'episode_count': s.get('episode_count', 0)}
+                for s in res_tv.get('seasons', []) if s.get('season_number', 0) > 0
+            ]
             season_num = int(selected_season) if selected_season.isdigit() else 1
             ep_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}/season/{season_num}?api_key={TMDB_API_KEY}&language=ar-SA'
             res_ep = requests.get(ep_url, headers=TMDB_HEADERS, timeout=4).json()
 
-            episodes = []
-            for ep in res_ep.get('episodes', []):
-                ep_num = ep.get('episode_number')
-                episodes.append({
-                    'episode_number': ep_num,
-                    'title': f"الحلقة {ep_num} - {ep.get('name', '')}",
-                    'search_title': (
-                        f'{title} الموسم {season_num} الحلقة {ep_num}'
-                        if title
-                        else f'الموسم {season_num} الحلقة {ep_num}'
-                    ),
-                    'search_orig_title': (
-                        f'{orig_title} S{season_num:02d}E{ep_num:02d}'
-                        if orig_title
-                        else f'S{season_num:02d}E{ep_num:02d}'
-                    ),
-                })
-
-            res_data = {
-                'status': 'success',
-                'data': {
-                    'current_season': season_num,
-                    'seasons': seasons,
-                    'episodes': episodes,
-                },
-            }
+            episodes = [
+                {
+                    'episode_number': ep.get('episode_number'),
+                    'title': f"الحلقة {ep.get('episode_number')} - {ep.get('name', '')}",
+                    'search_title': f'{title} الموسم {season_num} الحلقة {ep.get("episode_number")}' if title else f'الموسم {season_num} الحلقة {ep.get("episode_number")}',
+                    'search_orig_title': f'{orig_title} S{season_num:02d}E{ep.get("episode_number"):02d}' if orig_title else f'S{season_num:02d}E{ep.get("episode_number"):02d}',
+                }
+                for ep in res_ep.get('episodes', [])
+            ]
+            res_data = {'status': 'success', 'data': {'current_season': season_num, 'seasons': seasons, 'episodes': episodes}}
             set_cached(cache_key, res_data)
             return jsonify(res_data)
         except Exception as tmdb_err:
-            print(f'⚠️ TMDB Series Season Switch Error: {tmdb_err}')
+            print(f'⚠️ TMDB Series Error: {tmdb_err}')
 
-    return jsonify({
-        'status': 'success',
-        'data': {'current_season': 1, 'seasons': [], 'episodes': []},
-        'message': 'لم يتم العثور على حلقات لهذا المسلسل',
-    })
+    return jsonify({'status': 'success', 'data': {'current_season': 1, 'seasons': [], 'episodes': []}})
 
-
-# ==============================================================================
-# 7. مسار تفاصيل الأفلام
-# ==============================================================================
 
 @app.route('/api/movie-details', methods=['GET'])
 def get_movie_details():
@@ -708,177 +283,43 @@ def get_movie_details():
     if cached is not None:
         return jsonify(cached)
 
-    clean_id = None
-    if tmdb_id and tmdb_id.isdigit():
-        clean_id = tmdb_id
-    elif title:
+    clean_id = tmdb_id if tmdb_id.isdigit() else None
+    if not clean_id and title:
         try:
             search_url = f'{TMDB_BASE_URL}/search/movie?api_key={TMDB_API_KEY}&query={quote(title)}&language=ar-SA'
-            res = requests.get(search_url, headers=TMDB_HEADERS, timeout=4)
-            if res.status_code == 200:
-                results = res.json().get('results', [])
-                if results:
-                    clean_id = str(results[0].get('id', ''))
+            res = requests.get(search_url, headers=TMDB_HEADERS, timeout=4).json()
+            if res.get('results'):
+                clean_id = str(res['results'][0].get('id', ''))
         except Exception:
             pass
 
     if not clean_id:
-        return jsonify({
-            'status': 'success',
-            'data': None,
-            'message': 'لم يتم العثور على تفاصيل',
-        })
+        return jsonify({'status': 'success', 'data': None})
 
     try:
         detail_url = f'{TMDB_BASE_URL}/movie/{clean_id}?api_key={TMDB_API_KEY}&language=ar-SA&append_to_response=credits,videos'
-        res = requests.get(detail_url, headers=TMDB_HEADERS, timeout=4)
-        if res.status_code != 200:
-            return jsonify({'status': 'success', 'data': None})
-
-        data = res.json()
+        res = requests.get(detail_url, headers=TMDB_HEADERS, timeout=4).json()
         result = {
             'status': 'success',
             'data': {
-                'id': str(data.get('id', '')),
-                'title': data.get('title', ''),
-                'original_title': data.get('original_title', ''),
-                'overview': data.get('overview', ''),
-                'release_date': data.get('release_date', ''),
-                'runtime': data.get('runtime', 0),
-                'rating': round(data.get('vote_average', 0), 1),
-                'poster': format_poster(data.get('poster_path')),
-                'backdrop': format_backdrop(data.get('backdrop_path')),
-                'genres': [g.get('name', '') for g in data.get('genres', [])],
-                'cast': [
-                    {
-                        'name': c.get('name', ''),
-                        'character': c.get('character', ''),
-                    }
-                    for c in data.get('credits', {}).get('cast', [])[:10]
-                ],
-                'videos': [
-                    {
-                        'key': v.get('key', ''),
-                        'name': v.get('name', ''),
-                        'site': v.get('site', ''),
-                        'type': v.get('type', ''),
-                    }
-                    for v in data.get('videos', {}).get('results', [])[:5]
-                ],
+                'id': str(res.get('id', '')),
+                'title': res.get('title', ''),
+                'original_title': res.get('original_title', ''),
+                'overview': res.get('overview', ''),
+                'release_date': res.get('release_date', ''),
+                'runtime': res.get('runtime', 0),
+                'rating': round(res.get('vote_average', 0), 1),
+                'poster': format_poster(res.get('poster_path')),
+                'backdrop': format_backdrop(res.get('backdrop_path')),
+                'genres': [g.get('name', '') for g in res.get('genres', [])],
+                'cast': [{'name': c.get('name', ''), 'character': c.get('character', '')} for c in res.get('credits', {}).get('cast', [])[:10]],
+                'videos': [{'key': v.get('key', ''), 'name': v.get('name', ''), 'site': v.get('site', ''), 'type': v.get('type', '')} for v in res.get('videos', {}).get('results', [])[:5]],
             },
         }
-
         set_cached(cache_key, result)
         return jsonify(result)
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
-# ==============================================================================
-# 8. استخراج البث المباشر (سيرفرات Raphael / Flaxfer) مع دعم كاش Redis
-# ==============================================================================
-
-def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
-    """جلب روابط m3u8 والترجمات مباشرة من واجهات Raphael السريعة"""
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36',
-        'Referer': 'https://flaxfer.lol/',
-        'Origin': 'https://flaxfer.lol'
-    }
-
-    if str(media_type).lower() in ["tv", "series"]:
-        query = f"id={tmdb_id}&type=tv&season={season}&episode={episode}"
-    else:
-        query = f"id={tmdb_id}&type=movie"
-
-    endpoints = [
-        f"https://stela.raphsm4.dev/resolve?{query}",
-        f"https://api.vz.raphsm4.dev/resolve?{query}"
-    ]
-
-    streams = []
-    subtitles = []
-
-    for url in endpoints:
-        try:
-            res = requests.get(url, headers=headers, timeout=6)
-            if res.status_code == 200:
-                data = res.json()
-                if data.get("success"):
-                    stream_obj = data.get("stream")
-                    stream_url = stream_obj.get("url") if isinstance(stream_obj, dict) else stream_obj
-                    if stream_url:
-                        streams.append({
-                            "name": data.get("source") or data.get("serverName") or "Raphael Fast",
-                            "url": stream_url,
-                            "type": "m3u8"
-                        })
-
-                    for s in data.get("sources", []):
-                        s_url = s.get("url")
-                        if s_url and s_url != stream_url:
-                            streams.append({
-                                "name": s.get("name") or s.get("source") or "Backup Edge",
-                                "url": s_url,
-                                "type": "m3u8"
-                            })
-
-                    for sub in data.get("subtitles", []):
-                        sub_url = sub.get("url")
-                        sub_lang = (sub.get("label") or sub.get("language") or "").lower()
-                        if sub_url and any(ar in sub_lang for ar in ["arabic", "ara", "ar", "english", "en"]):
-                            subtitles.append({
-                                "label": sub.get("label") or sub.get("language"),
-                                "url": sub_url
-                            })
-
-                    if streams:
-                        break
-        except Exception as e:
-            print(f"⚠️ Raphael API Error ({url}): {e}")
-            continue
-
-    return {"streams": streams, "subtitles": subtitles}
-
-
-@app.route('/api/source', methods=['GET'])
-def get_stream_source():
-    """مسار يطلبه التطبيق لتشغيل الفيلم أو الحلقة مباشرة"""
-    tmdb_id = request.args.get('id') or request.args.get('tmdb_id')
-    media_type = request.args.get('type', 'movie')
-    season = request.args.get('season', 1)
-    episode = request.args.get('episode', 1)
-
-    if not tmdb_id:
-        return jsonify({'status': 'error', 'message': 'Missing TMDB ID'}), 400
-
-    cache_key = f"source:flaxfer:{tmdb_id}:{media_type}:{season}:{episode}"
-    cached = get_cached(cache_key)
-    if cached is not None:
-        return jsonify(cached)
-
-    result = extract_raphael_streams(tmdb_id, media_type, season, episode)
-
-    # تحويل الروابط إلى الهيكل المطلوب في GenericScraper (مصفوفة links)
-    formatted_links = []
-    for s in result.get('streams', []):
-        formatted_links.append({
-            "url": s["url"],
-            "quality": 1080,
-            "source": s.get("name", "Flaxfer HD")
-        })
-
-    res_data = {
-        'status': 'success' if formatted_links else 'not_found',
-        'links': formatted_links,
-        'streams': result['streams'],
-        'subtitles': result['subtitles']
-    }
-
-    if formatted_links:
-        set_cached(cache_key, res_data, ttl=7200)
-
-    return jsonify(res_data)
 
 
 if __name__ == '__main__':
