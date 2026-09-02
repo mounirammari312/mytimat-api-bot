@@ -313,167 +313,160 @@ def get_config():
 # ==============================================================================
 # 3. مسار الرئيسية (4 أقسام + الاعتماد على الاسم الأصلي أولاً)
 # ==============================================================================
+# ==============================================================================
+# 3. مسار الرئيسية المطور (Server-Driven UI الديناميكي)
+# ==============================================================================
+
+def fetch_tmdb_discover(endpoint_path, query_params, media_type, default_tag='TMDB', limit=10):
+    """دالة مساعدة موحدة لجلب وتنسيق بطاقات TMDB لأي قسم جديد في سطرين."""
+    url = f"{TMDB_BASE_URL}/{endpoint_path}?api_key={TMDB_API_KEY}&language=ar-SA&{query_params}"
+    try:
+        res = requests.get(url, headers=TMDB_HEADERS, timeout=2.5)
+        if res.status_code == 200:
+            items = []
+            for item in res.json().get('results', [])[:limit]:
+                if not item.get('poster_path'):
+                    continue
+                
+                title = item.get('title') or item.get('name') or item.get('original_title') or item.get('original_name', '')
+                orig_title = item.get('original_title') or item.get('original_name', '')
+                release_date = item.get('release_date') or item.get('first_air_date', '')
+                year = str(release_date)[:4] if release_date else ''
+                
+                search_query = quote(orig_title if orig_title else title)
+                
+                items.append({
+                    'id': str(item.get('id', '')),
+                    'url': f"{AKWAM_BASE_DOMAIN}/search?q={search_query}",
+                    'title': title,
+                    'original_title': orig_title,
+                    'poster': format_poster(item.get('poster_path')),
+                    'backdrop': format_backdrop(item.get('backdrop_path') or item.get('poster_path')),
+                    'rating': round(item.get('vote_average', 0), 1),
+                    'tags': [default_tag, year] if year else [default_tag],
+                    'type': media_type,
+                })
+            return items
+    except Exception as e:
+        print(f"⚠️ TMDB Discover Error ({endpoint_path}): {e}")
+    return []
+
 
 @app.route('/api/home', methods=['GET'])
 def get_home():
-    CACHE_KEY = 'home_data_v6'
+    CACHE_KEY = 'home_data_v7_rich_ui'
     cached = get_cached(CACHE_KEY)
     if cached is not None:
         return jsonify(cached)
 
     try:
-        trending_movies = []
-        trending_tv = []
-        top_rated_movies = []
-        classic_docs = []
+        sections_list = []
 
-        # 1. Trending Movies
-        try:
-            m_res = requests.get(
-                f'{TMDB_BASE_URL}/trending/movie/week?api_key={TMDB_API_KEY}&language=ar-SA',
-                headers=TMDB_HEADERS,
-                timeout=2.5
-            )
-            if m_res.status_code == 200:
-                trending_movies = [
-                    {
-                        'id': str(m.get('id', '')),
-                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(m.get('original_title') or m.get('title', ''))}",
-                        'title': m.get('title') or m.get('original_title', ''),
-                        'original_title': m.get('original_title', ''),
-                        'poster': format_poster(m.get('poster_path')),
-                        'backdrop': format_backdrop(m.get('backdrop_path') or m.get('poster_path')),
-                        'rating': round(m.get('vote_average', 0), 1),
-                        'tags': ['TMDB', str(m.get('release_date', ''))[:4] if m.get('release_date') else '2026'],
-                        'type': 'movie',
-                    }
-                    for m in m_res.json().get('results', [])[:10]
-                    if m.get('poster_path')
-                ]
-        except Exception as e:
-            print(f"⚠️ Trending Movies Error: {e}")
-
-        # 2. Trending TV
-        try:
-            t_res = requests.get(
-                f'{TMDB_BASE_URL}/trending/tv/week?api_key={TMDB_API_KEY}&language=ar-SA',
-                headers=TMDB_HEADERS,
-                timeout=2.5
-            )
-            if t_res.status_code == 200:
-                trending_tv = [
-                    {
-                        'id': str(t.get('id', '')),
-                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(t.get('original_name') or t.get('name', ''))}",
-                        'title': t.get('name') or t.get('original_name', ''),
-                        'original_title': t.get('original_name', ''),
-                        'poster': format_poster(t.get('poster_path')),
-                        'backdrop': format_backdrop(t.get('backdrop_path') or t.get('poster_path')),
-                        'rating': round(t.get('vote_average', 0), 1),
-                        'tags': ['TMDB', str(t.get('first_air_date', ''))[:4] if t.get('first_air_date') else '2026'],
-                        'type': 'tv',
-                    }
-                    for t in t_res.json().get('results', [])[:10]
-                    if t.get('poster_path')
-                ]
-        except Exception as e:
-            print(f"⚠️ Trending TV Error: {e}")
-
-        # 3. Top Rated Movies
-        try:
-            top_res = requests.get(
-                f'{TMDB_BASE_URL}/movie/top_rated?api_key={TMDB_API_KEY}&language=ar-SA',
-                headers=TMDB_HEADERS,
-                timeout=2.5
-            )
-            if top_res.status_code == 200:
-                top_rated_movies = [
-                    {
-                        'id': str(m.get('id', '')),
-                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(m.get('original_title') or m.get('title', ''))}",
-                        'title': m.get('title') or m.get('original_title', ''),
-                        'original_title': m.get('original_title', ''),
-                        'poster': format_poster(m.get('poster_path')),
-                        'backdrop': format_backdrop(m.get('backdrop_path') or m.get('poster_path')),
-                        'rating': round(m.get('vote_average', 0), 1),
-                        'tags': ['⭐ الأعلى تقييماً', str(m.get('release_date', ''))[:4] if m.get('release_date') else ''],
-                        'type': 'movie',
-                    }
-                    for m in top_res.json().get('results', [])[:10]
-                    if m.get('poster_path')
-                ]
-        except Exception as e:
-            print(f"⚠️ Top Rated Error: {e}")
-
-        # 4. Classic Documentaries
-        try:
-            docs_url = (
-                f'{TMDB_BASE_URL}/discover/movie?api_key={TMDB_API_KEY}'
-                '&with_genres=99&primary_release_date.lte=1995-01-01'
-                '&sort_by=vote_average.desc&vote_count.gte=10&language=ar-SA'
-            )
-            docs_res = requests.get(docs_url, headers=TMDB_HEADERS, timeout=2.5)
-            if docs_res.status_code == 200:
-                classic_docs = [
-                    {
-                        'id': str(m.get('id', '')),
-                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(m.get('original_title') or m.get('title', ''))}",
-                        'title': m.get('title') or m.get('original_title', ''),
-                        'original_title': m.get('original_title', ''),
-                        'poster': format_poster(m.get('poster_path')),
-                        'backdrop': format_backdrop(m.get('backdrop_path') or m.get('poster_path')),
-                        'rating': round(m.get('vote_average', 0), 1),
-                        'tags': ['📜 وثائقي قديم', str(m.get('release_date', ''))[:4] if m.get('release_date') else ''],
-                        'type': 'movie',
-                    }
-                    for m in docs_res.json().get('results', [])[:10]
-                    if m.get('poster_path')
-                ]
-        except Exception as e:
-            print(f"⚠️ Classic Docs Error: {e}")
-
-        # احتياط Akwam المباشر
+        # 1. 🔥 الأفلام الأكثر شهرة (Trending Movies)
+        trending_movies = fetch_tmdb_discover('trending/movie/week', '', 'movie', '🔥 رائج')
         if not trending_movies:
             res_m = requests.get(f'{AKWAM_BASE_DOMAIN}/movies', headers=get_akwam_headers(), timeout=3)
             soup_m = BeautifulSoup(res_m.text, 'html.parser')
             trending_movies = parse_akwam_cards(soup_m)[:10]
 
+        sections_list.append({
+            'key': 'trending_movies',
+            'title': '🔥 الأفلام الأكثر شهرة',
+            'has_see_all': True,
+            'see_all_params': {'type': 'movies', 'page': 1},
+            'items': trending_movies,
+        })
+
+        # 2. 📺 المسلسلات الأكثر مشاهدة (Trending TV)
+        trending_tv = fetch_tmdb_discover('trending/tv/week', '', 'tv', '📺 مسلسلات')
         if not trending_tv:
             res_t = requests.get(f'{AKWAM_BASE_DOMAIN}/series', headers=get_akwam_headers(), timeout=3)
             soup_t = BeautifulSoup(res_t.text, 'html.parser')
             trending_tv = parse_akwam_cards(soup_t)[:10]
 
-        # بناء قائمة الأقسام المعروضة
-        sections_list = [
-            {
-                'key': 'trending_movies',
-                'title': '🔥 الأفلام الأكثر شهرة',
-                'has_see_all': True,
-                'see_all_params': {'type': 'movies', 'page': 1},
-                'items': trending_movies,
-            },
-            {
-                'key': 'trending_tv',
-                'title': '📺 المسلسلات الأكثر مشاهدة',
-                'has_see_all': True,
-                'see_all_params': {'type': 'series', 'page': 1},
-                'items': trending_tv,
-            }
-        ]
+        sections_list.append({
+            'key': 'trending_tv',
+            'title': '📺 المسلسلات الأكثر مشاهدة',
+            'has_see_all': True,
+            'see_all_params': {'type': 'series', 'page': 1},
+            'items': trending_tv,
+        })
 
+        # 3. 💥 أفلام الحركة والأكشن (Action Movies)
+        action_movies = fetch_tmdb_discover(
+            'discover/movie',
+            'with_genres=28&sort_by=popularity.desc&vote_count.gte=100',
+            'movie',
+            '💥 أكشن'
+        )
+        if action_movies:
+            sections_list.append({
+                'key': 'action_movies',
+                'title': '💥 أفلام الحركة والإثارة',
+                'has_see_all': False,
+                'see_all_params': {},
+                'items': action_movies,
+            })
+
+        # 4. 🎨 سينما الرسوم المتحركة والأنمي (Animation & Family)
+        animation_movies = fetch_tmdb_discover(
+            'discover/movie',
+            'with_genres=16,10751&sort_by=popularity.desc&vote_count.gte=50',
+            'movie',
+            '🎨 أنمي'
+        )
+        if animation_movies:
+            sections_list.append({
+                'key': 'animation_movies',
+                'title': '🎨 روائع الأنمي والكرتون',
+                'has_see_all': False,
+                'see_all_params': {},
+                'items': animation_movies,
+            })
+
+        # 5. 🇰🇷 الدراما الكورية (K-Drama)
+        korean_drama = fetch_tmdb_discover(
+            'discover/tv',
+            'with_original_language=ko&sort_by=popularity.desc&vote_count.gte=20',
+            'tv',
+            '🇰🇷 كوري'
+        )
+        if korean_drama:
+            sections_list.append({
+                'key': 'korean_drama',
+                'title': '🇰🇷 الدراما والمسلسلات الكورية',
+                'has_see_all': False,
+                'see_all_params': {},
+                'items': korean_drama,
+            })
+
+        # 6. ⭐ الأفلام الأعلى تقييماً (Top Rated)
+        top_rated_movies = fetch_tmdb_discover(
+            'movie/top_rated',
+            'vote_count.gte=500',
+            'movie',
+            '⭐ الأعلى تقييماً'
+        )
         if top_rated_movies:
             sections_list.append({
                 'key': 'top_rated_movies',
-                'title': '⭐ الأفلام الأعلى تقييماً',
+                'title': '⭐ سينما النخبة (الأعلى تقييماً)',
                 'has_see_all': False,
                 'see_all_params': {},
                 'items': top_rated_movies,
             })
 
+        # 7. 📜 أفلام وثائقية قديمة (Classic Docs)
+        classic_docs = fetch_tmdb_discover(
+            'discover/movie',
+            'with_genres=99&primary_release_date.lte=1995-01-01&sort_by=vote_average.desc&vote_count.gte=10',
+            'movie',
+            '📜 وثائقي'
+        )
         if classic_docs:
             sections_list.append({
                 'key': 'classic_docs',
-                'title': '📜 أفلام وثائقية قديمة',
+                'title': '📜 أفلام وثائقية كلاسيكية',
                 'has_see_all': False,
                 'see_all_params': {},
                 'items': classic_docs,
@@ -484,11 +477,20 @@ def get_home():
             'data': sections_list
         }
 
+        # تخزين النتيجة المكتملة في Upstash Redis
         set_cached(CACHE_KEY, result)
         return jsonify(result)
 
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+                    
+
+        
+
+
+
 
 
 # ==============================================================================
