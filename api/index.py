@@ -213,9 +213,9 @@ def get_config():
 
 
             {
-                'name': 'cinejoy',
-                'domain': 'https://cinejoy.to',
-                'search_path': '/embed/movie/{tmdb_id}',
+                'name': 'netplayz',
+                'domain': 'https://netplayz.icu',
+                'search_path': '/watch?type=movie&id={tmdb_id}',
                 'card_selector': '',
                 'movie_selector': '',
                 'series_selector': '',
@@ -223,18 +223,40 @@ def get_config():
                 'iframe_selector': 'iframe',
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'tmdb_mode': True,
-                'requires_unpack': False,
+                'requires_unpack': True,
                 'ajax_required': False,
                 'extractor_script': r"""
                     (function() {
-                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
-                        if (match) {
+                        // 1. البحث عن روابط m3u8 أو mp4 مباشرة في كود الصفحة
+                        var directMatch = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
+                        if (directMatch) {
                             return {
-                                url: match[0],
-                                referer: 'https://cinejoy.to/',
-                                quality: '1080p FHD'
+                                url: directMatch[0],
+                                referer: __PAGE_URL__,
+                                quality: '1080p Clean'
                             };
                         }
+
+                        // 2. البحث داخل كائنات المشغلات (sources: [{file: '...'}])
+                        var fileMatch = __HTML__.match(/(?:file|source|src)\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
+                        if (fileMatch) {
+                            return {
+                                url: fileMatch[1],
+                                referer: __PAGE_URL__,
+                                quality: '1080p Clean'
+                            };
+                        }
+
+                        // 3. استخراج رابط السيرفر من iframe في حال وجود وسيط
+                        var iframeSrc = __HTML__.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+                        if (iframeSrc && iframeSrc[1].startsWith('http')) {
+                            return {
+                                url: iframeSrc[1],
+                                referer: __PAGE_URL__,
+                                quality: 'Embed'
+                            };
+                        }
+
                         return null;
                     })();
                 """
