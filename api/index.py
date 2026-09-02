@@ -211,28 +211,67 @@ def get_config():
         'version': '9.10.0-Production',
         'providers': [
 
+
+
+
+
+
+
             
-            }
+            {
                 'name': 'flaxfer_hd',
-                'title': 'Flaxfer HD (سيرفرات سريعة + ترجمة)',
-                'type': 'direct_api',
-                'api_endpoint': '/api/source?id={tmdb_id}&type={type}&season={season}&episode={episode}',
-                'ajax_required': False,
+                'domain': 'https://stela.raphsm4.dev',
+                'search_path': '/resolve?id={tmdb_id}&type=movie',
+                'card_selector': '',
+                'movie_selector': '',
+                'series_selector': '',
+                'watch_selector': '',
+                'iframe_selector': '',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'tmdb_mode': True,
-                'status': 'active'
-
-
-            },
-
-
-
-
-
-
-            
-                                    
+                'requires_unpack': False,
+                'ajax_required': False,
+                'extractor_script': r"""
+                    (function() {
+                        try {
+                            var data = JSON.parse(__HTML__);
+                            
+                            // 1. رابط البث الأساسي
+                            if (data && data.stream) {
+                                var streamUrl = (typeof data.stream === 'object') ? data.stream.url : data.stream;
+                                if (streamUrl) {
+                                    return {
+                                        url: streamUrl,
+                                        referer: 'https://flaxfer.lol/',
+                                        quality: '1080p Multi'
+                                    };
+                                }
+                            }
+                            
+                            // 2. السيرفرات البديلة في حال غياب الأساسي
+                            if (data && data.sources && data.sources.length > 0) {
+                                return {
+                                    url: data.sources[0].url,
+                                    referer: 'https://flaxfer.lol/',
+                                    quality: '1080p Direct'
+                                };
+                            }
+                        } catch(e) {}
+                        
+                        return null;
+                    })();
+                """
+            }
         ],
     })
+
+
+
+
+
+
+            
+
 
 
 # ==============================================================================
