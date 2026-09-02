@@ -210,6 +210,42 @@ def get_config():
         'status': 'success',
         'version': '9.10.0-Production',
         'providers': [
+
+
+            {
+                'name': 'cinejoy',
+                'domain': 'https://cinejoy.to',
+                'search_path': '/embed/movie/{tmdb_id}',
+                'card_selector': '',
+                'movie_selector': '',
+                'series_selector': '',
+                'watch_selector': '',
+                'iframe_selector': 'iframe',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+                'tmdb_mode': True,
+                'requires_unpack': False,
+                'ajax_required': False,
+                'extractor_script': r"""
+                    (function() {
+                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
+                        if (match) {
+                            return {
+                                url: match[0],
+                                referer: 'https://cinejoy.to/',
+                                quality: '1080p FHD'
+                            };
+                        }
+                        return null;
+                    })();
+                """
+            },
+
+
+
+
+
+
+            
             {
                 'name': 'akwam',
                 'domain': AKWAM_BASE_DOMAIN,
