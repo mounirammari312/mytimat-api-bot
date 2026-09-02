@@ -204,24 +204,19 @@ def test_redis_debug():
         return jsonify({"status": "error", "exception_message": str(e)}), 500
 
 
-@app.route('/api/config', methods=['GET'])
+     @app.route('/api/config', methods=['GET'])
 def get_config():
+    # جلب الدومين الخاص بسيرفر Vercel تلقائياً دون الحاجة لكتابته يدوياً
+    base_server_url = request.host_url.rstrip('/')
+
     return jsonify({
         'status': 'success',
         'version': '9.10.0-Production',
         'providers': [
-
-
-
-
-
-
-
-            
             {
                 'name': 'flaxfer_hd',
-                'domain': 'https://stela.raphsm4.dev',
-                'search_path': '/resolve?id={tmdb_id}&type=movie',
+                'domain': base_server_url,
+                'search_path': '/api/source?id={tmdb_id}&type=movie',
                 'card_selector': '',
                 'movie_selector': '',
                 'series_selector': '',
@@ -234,36 +229,22 @@ def get_config():
                 'extractor_script': r"""
                     (function() {
                         try {
-                            var data = JSON.parse(__HTML__);
-                            
-                            // 1. رابط البث الأساسي
-                            if (data && data.stream) {
-                                var streamUrl = (typeof data.stream === 'object') ? data.stream.url : data.stream;
-                                if (streamUrl) {
-                                    return {
-                                        url: streamUrl,
-                                        referer: 'https://flaxfer.lol/',
-                                        quality: '1080p Multi'
-                                    };
-                                }
-                            }
-                            
-                            // 2. السيرفرات البديلة في حال غياب الأساسي
-                            if (data && data.sources && data.sources.length > 0) {
+                            var res = JSON.parse(__HTML__);
+                            if (res && res.streams && res.streams.length > 0) {
                                 return {
-                                    url: data.sources[0].url,
+                                    url: res.streams[0].url,
                                     referer: 'https://flaxfer.lol/',
-                                    quality: '1080p Direct'
+                                    quality: res.streams[0].name || '1080p HD'
                                 };
                             }
                         } catch(e) {}
-                        
                         return null;
                     })();
                 """
             }
         ],
     })
+
 
 
 
