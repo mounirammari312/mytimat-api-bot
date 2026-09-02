@@ -206,17 +206,14 @@ def test_redis_debug():
 
      @app.route('/api/config', methods=['GET'])
 def get_config():
-    # جلب الدومين الخاص بسيرفر Vercel تلقائياً دون الحاجة لكتابته يدوياً
-    base_server_url = request.host_url.rstrip('/')
-
     return jsonify({
         'status': 'success',
         'version': '9.10.0-Production',
         'providers': [
             {
                 'name': 'flaxfer_hd',
-                'domain': base_server_url,
-                'search_path': '/api/source?id={tmdb_id}&type=movie',
+                'domain': 'https://mytimat-api-bot.vercel.app',
+                'search_path': '/api/source?id={tmdb_id}',
                 'card_selector': '',
                 'movie_selector': '',
                 'series_selector': '',
@@ -225,22 +222,7 @@ def get_config():
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'tmdb_mode': True,
                 'requires_unpack': False,
-                'ajax_required': False,
-                'extractor_script': r"""
-                    (function() {
-                        try {
-                            var res = JSON.parse(__HTML__);
-                            if (res && res.streams && res.streams.length > 0) {
-                                return {
-                                    url: res.streams[0].url,
-                                    referer: 'https://flaxfer.lol/',
-                                    quality: res.streams[0].name || '1080p HD'
-                                };
-                            }
-                        } catch(e) {}
-                        return null;
-                    })();
-                """
+                'ajax_required': False
             }
         ],
     })
@@ -891,6 +873,7 @@ def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
     return {"streams": streams, "subtitles": subtitles}
 
 
+
 @app.route('/api/source', methods=['GET'])
 def get_stream_source():
     """مسار يطلبه التطبيق لتشغيل الفيلم أو الحلقة مباشرة"""
@@ -902,7 +885,6 @@ def get_stream_source():
     if not tmdb_id:
         return jsonify({'status': 'error', 'message': 'Missing TMDB ID'}), 400
 
-    # فحص الكاش في Upstash Redis أولاً
     cache_key = f"source:flaxfer:{tmdb_id}:{media_type}:{season}:{episode}"
     cached = get_cached(cache_key)
     if cached is not None:
@@ -910,19 +892,26 @@ def get_stream_source():
 
     result = extract_raphael_streams(tmdb_id, media_type, season, episode)
 
+    # تحويل الروابط إلى الهيكل المطلوب في GenericScraper (مصفوفة links)
+    formatted_links = []
+    for s in result.get('streams', []):
+        formatted_links.append({
+            "url": s["url"],
+            "quality": 1080,
+            "source": s.get("name", "Flaxfer HD")
+        })
+
     res_data = {
-        'status': 'success' if result['streams'] else 'not_found',
-        'provider': 'flaxfer_hd',
-        'streams': result['streams'],
+        'status': 'success' if formatted_links else 'not_found',
+        'links': formatted_links,       # المفتاح الأساسي الذي يقرأه تطبيق الأندرويد
+        'streams': result['streams'],   # للتوافق المستقبلي
         'subtitles': result['subtitles']
     }
 
-    # حفظ في الكاش لمدة ساعتين لضمان استقرار روابط m3u8
-    if result['streams']:
+    if formatted_links:
         set_cached(cache_key, res_data, ttl=7200)
 
     return jsonify(res_data)
-
 
 
 
