@@ -211,55 +211,17 @@ def get_config():
         'version': '9.10.0-Production',
         'providers': [
 
-
-            {
-                'name': 'netplayz',
-                'domain': 'https://netplayz.icu',
-                'search_path': '/watch?type=movie&id={tmdb_id}',
-                'card_selector': '',
-                'movie_selector': '',
-                'series_selector': '',
-                'watch_selector': '',
-                'iframe_selector': 'iframe',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+            
+            }
+                'name': 'flaxfer_hd',
+                'title': 'Flaxfer HD (سيرفرات سريعة + ترجمة)',
+                'type': 'direct_api',
+                'api_endpoint': '/api/source?id={tmdb_id}&type={type}&season={season}&episode={episode}',
+                'ajax_required': False,
                 'tmdb_mode': True,
-                'requires_unpack': True,
-                'ajax_required': True,
-                'extractor_script': r"""
-                    (function() {
-                        // 1. البحث عن روابط m3u8 أو mp4 مباشرة في كود الصفحة
-                        var directMatch = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
-                        if (directMatch) {
-                            return {
-                                url: directMatch[0],
-                                referer: __PAGE_URL__,
-                                quality: '1080p Clean'
-                            };
-                        }
+                'status': 'active'
 
-                        // 2. البحث داخل كائنات المشغلات (sources: [{file: '...'}])
-                        var fileMatch = __HTML__.match(/(?:file|source|src)\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-                        if (fileMatch) {
-                            return {
-                                url: fileMatch[1],
-                                referer: __PAGE_URL__,
-                                quality: '1080p Clean'
-                            };
-                        }
 
-                        // 3. استخراج رابط السيرفر من iframe في حال وجود وسيط
-                        var iframeSrc = __HTML__.match(/<iframe[^>]+src=["']([^"']+)["']/i);
-                        if (iframeSrc && iframeSrc[1].startsWith('http')) {
-                            return {
-                                url: iframeSrc[1],
-                                referer: __PAGE_URL__,
-                                quality: 'Embed'
-                            };
-                        }
-
-                        return null;
-                    })();
-                """
             },
 
 
@@ -836,6 +798,114 @@ def get_movie_details():
         return jsonify(result)
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+
+# ==============================================================================
+# 8. استخراج البث المباشر (سيرفرات Raphael / Flaxfer) مع دعم كاش Redis
+# ==============================================================================
+
+def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
+    """جلب روابط m3u8 والترجمات مباشرة من واجهات Raphael السريعة"""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36',
+        'Referer': 'https://flaxfer.lol/',
+        'Origin': 'https://flaxfer.lol'
+    }
+
+    if str(media_type).lower() in ["tv", "series"]:
+        query = f"id={tmdb_id}&type=tv&season={season}&episode={episode}"
+    else:
+        query = f"id={tmdb_id}&type=movie"
+
+    endpoints = [
+        f"https://stela.raphsm4.dev/resolve?{query}",
+        f"https://api.vz.raphsm4.dev/resolve?{query}"
+    ]
+
+    streams = []
+    subtitles = []
+
+    for url in endpoints:
+        try:
+            res = requests.get(url, headers=headers, timeout=6)
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("success"):
+                    # رابط البث الأساسي
+                    stream_obj = data.get("stream")
+                    stream_url = stream_obj.get("url") if isinstance(stream_obj, dict) else stream_obj
+                    if stream_url:
+                        streams.append({
+                            "name": data.get("source") or data.get("serverName") or "Raphael Fast",
+                            "url": stream_url,
+                            "type": "m3u8"
+                        })
+
+                    # السيرفرات البديلة
+                    for s in data.get("sources", []):
+                        s_url = s.get("url")
+                        if s_url and s_url != stream_url:
+                            streams.append({
+                                "name": s.get("name") or s.get("source") or "Backup Edge",
+                                "url": s_url,
+                                "type": "m3u8"
+                            })
+
+                    # ملفات الترجمة (العربية والإنجليزية)
+                    for sub in data.get("subtitles", []):
+                        sub_url = sub.get("url")
+                        sub_lang = (sub.get("label") or sub.get("language") or "").lower()
+                        if sub_url and any(ar in sub_lang for ar in ["arabic", "ara", "ar", "english", "en"]):
+                            subtitles.append({
+                                "label": sub.get("label") or sub.get("language"),
+                                "url": sub_url
+                            })
+
+                    if streams:
+                        break
+        except Exception as e:
+            print(f"⚠️ Raphael API Error ({url}): {e}")
+            continue
+
+    return {"streams": streams, "subtitles": subtitles}
+
+
+@app.route('/api/source', methods=['GET'])
+def get_stream_source():
+    """مسار يطلبه التطبيق لتشغيل الفيلم أو الحلقة مباشرة"""
+    tmdb_id = request.args.get('id') or request.args.get('tmdb_id')
+    media_type = request.args.get('type', 'movie')
+    season = request.args.get('season', 1)
+    episode = request.args.get('episode', 1)
+
+    if not tmdb_id:
+        return jsonify({'status': 'error', 'message': 'Missing TMDB ID'}), 400
+
+    # فحص الكاش في Upstash Redis أولاً
+    cache_key = f"source:flaxfer:{tmdb_id}:{media_type}:{season}:{episode}"
+    cached = get_cached(cache_key)
+    if cached is not None:
+        return jsonify(cached)
+
+    result = extract_raphael_streams(tmdb_id, media_type, season, episode)
+
+    res_data = {
+        'status': 'success' if result['streams'] else 'not_found',
+        'provider': 'flaxfer_hd',
+        'streams': result['streams'],
+        'subtitles': result['subtitles']
+    }
+
+    # حفظ في الكاش لمدة ساعتين لضمان استقرار روابط m3u8
+    if result['streams']:
+        set_cached(cache_key, res_data, ttl=7200)
+
+    return jsonify(res_data)
+
+
+
+
 
 
 if __name__ == '__main__':
