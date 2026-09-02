@@ -20,7 +20,7 @@ TMDB_BASE_URL = 'https://api.themoviedb.org/3'
 
 UPSTASH_REDIS_REST_URL = "https://immortal-redfish-188577.upstash.io"
 UPSTASH_REDIS_REST_TOKEN = "gQAAAAAAAuChAAIgcDI2MGIzYmQwZTdhYTQ0Y2MxYjFmZTU1YjU2ZGMyNGI0Mw"
-CACHE_TTL_SECONDS = 6 * 3600  # 6 ساعات
+CACHE_TTL_SECONDS = 6 * 3600  # 6 ساعات صلاحية الكاش
 
 
 def get_cached(key):
@@ -64,7 +64,7 @@ LARROZA_BASE_DOMAIN = 'https://larroza.mom'
 
 
 # ==============================================================================
-# 1. اكتشاف دومين أكوام الاحتياطي
+# 1. اكتشاف دومين أكوام النشط تلقائياً
 # ==============================================================================
 
 def safe_url(url):
@@ -161,23 +161,25 @@ def parse_akwam_cards(soup):
 
 
 # ==============================================================================
-# 2. مسارات التشخيص والإعدادات (QFilm فقط)
+# 2. مسارات التشخيص والإعدادات (المرحلة 4: دعم Cloud Micro-Scripts)
 # ==============================================================================
 
 @app.route('/', methods=['GET'])
 def index():
     return jsonify({
         'status': 'online',
-        'mode': 'QFilm Standalone Scraper Mode',
+        'mode': 'JSON Rules Engine + QuickJS Micro-Scripts + Upstash Redis Cache',
         'active_domains': {
-            'qfilm': 'https://a.qfilm.tv'
+            'akwam': AKWAM_BASE_DOMAIN,
+            'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '9.5.0-QFilmOnly',
+        'version': '9.10.0-Production',
     })
 
 
 @app.route('/api/test-redis', methods=['GET'])
 def test_redis_debug():
+    """مسار فحص وتحديد أخطاء الاتصال بـ Upstash Redis مباشرة"""
     try:
         headers = {"Authorization": f"Bearer {UPSTASH_REDIS_REST_TOKEN}"}
         set_res = requests.post(
@@ -206,31 +208,115 @@ def test_redis_debug():
 def get_config():
     return jsonify({
         'status': 'success',
-        'version': '9.5.0-QFilmOnly',
+        'version': '9.10.0-Production',
         'providers': [
+            {
+                'name': 'akwam',
+                'domain': AKWAM_BASE_DOMAIN,
+                'search_path': '/search?q={query}',
+                'movie_selector': 'a[href*=/movie/]',
+                'series_selector': 'a[href*=/series/]',
+                'ep_selector': 'a[href*=/episode/]',
+                'watch_selector': 'a[href*=/watch/], a.link-btn',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
+                'requires_unpack': False,
+                'extractor_script': r"""
+                    (function() {
+                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:mp4)[^\s"'<>]*/i);
+                        if (match) {
+                            return {
+                                url: match[0],
+                                referer: __PAGE_URL__,
+                                quality: '1080p FHD'
+                            };
+                        }
+                        return null;
+                    })();
+                """
+            },
+            {
+                'name': 'larroza',
+                'domain': LARROZA_BASE_DOMAIN,
+                'search_path': '/search.php?keywords={query}',
+                'card_selector': 'a[href*=video.php]',
+                'iframe_selector': 'iframe',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+                'requires_unpack': True,
+                'extractor_script': r"""
+                    (function() {
+                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
+                        if (match) {
+                            return {
+                                url: match[0],
+                                referer: __PAGE_URL__,
+                                quality: match[0].indexOf('.m3u8') !== -1 ? 'HLS' : '1080p'
+                            };
+                        }
+                        return null;
+                    })();
+                """
+            },
+            {
+                'name': 'moviz-time',
+                'domain': 'https://moviz-time.site',
+                'search_path': '/?s={query}',
+                'card_selector': 'a[href*="/watch/"], a[href*="/series/"], article.post a',
+                'watch_selector': 'iframe, [data-link], [data-url], [data-post], .single_tab, .play-btn, .server-item',
+                'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link]',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
+                'requires_unpack': True,
+                'ajax_required': True,
+                'series_selector': 'a[href*="/series/"]',
+                'extractor_script': r"""
+                    (function() {
+                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4|txt)[^\s"'<>]*/i);
+                        if (match) {
+                            return {
+                                url: match[0],
+                                referer: __PAGE_URL__,
+                                quality: 'Auto'
+                            };
+                        }
+                        return null;
+                    })();
+                """
+            },
             {
                 'name': 'qfilm',
                 'domain': 'https://a.qfilm.tv',
                 'search_path': '/search.php?keywords={query}',
-                'card_selector': 'ul.pm-ul-browse-videos li a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"], .pm-li-video a[href*="watch.php"], #pm-items-grid a[href*="watch.php"]',
-                'movie_selector': 'ul.pm-ul-browse-videos li a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"], .pm-li-video a[href*="watch.php"]',
+                'card_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"], .pm-search-results a[href*="watch.php"]',
+                'movie_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"]',
                 'series_selector': 'a[href*="series.php"], a[href*="watch.php"]',
                 'iframe_selector': 'iframe',
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'ajax_required': True,
                 'requires_unpack': False,
+                'extractor_script': r"""
+                    (function() {
+                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
+                        if (match) {
+                            return {
+                                url: match[0],
+                                referer: __PAGE_URL__,
+                                quality: 'HD'
+                            };
+                        }
+                        return null;
+                    })();
+                """
             },
         ],
     })
 
 
 # ==============================================================================
-# 3. مسار الرئيسية
+# 3. مسار الرئيسية (4 أقسام + الاعتماد على الاسم الأصلي أولاً)
 # ==============================================================================
 
 @app.route('/api/home', methods=['GET'])
 def get_home():
-    CACHE_KEY = 'home_data_qfilm_v1'
+    CACHE_KEY = 'home_data_v6'
     cached = get_cached(CACHE_KEY)
     if cached is not None:
         return jsonify(cached)
@@ -241,6 +327,7 @@ def get_home():
         top_rated_movies = []
         classic_docs = []
 
+        # 1. Trending Movies
         try:
             m_res = requests.get(
                 f'{TMDB_BASE_URL}/trending/movie/week?api_key={TMDB_API_KEY}&language=ar-SA',
@@ -251,7 +338,7 @@ def get_home():
                 trending_movies = [
                     {
                         'id': str(m.get('id', '')),
-                        'url': f"https://a.qfilm.tv/search.php?keywords={quote(m.get('original_title') or m.get('title', ''))}",
+                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(m.get('original_title') or m.get('title', ''))}",
                         'title': m.get('title') or m.get('original_title', ''),
                         'original_title': m.get('original_title', ''),
                         'poster': format_poster(m.get('poster_path')),
@@ -266,6 +353,7 @@ def get_home():
         except Exception as e:
             print(f"⚠️ Trending Movies Error: {e}")
 
+        # 2. Trending TV
         try:
             t_res = requests.get(
                 f'{TMDB_BASE_URL}/trending/tv/week?api_key={TMDB_API_KEY}&language=ar-SA',
@@ -276,7 +364,7 @@ def get_home():
                 trending_tv = [
                     {
                         'id': str(t.get('id', '')),
-                        'url': f"https://a.qfilm.tv/search.php?keywords={quote(t.get('original_name') or t.get('name', ''))}",
+                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(t.get('original_name') or t.get('name', ''))}",
                         'title': t.get('name') or t.get('original_name', ''),
                         'original_title': t.get('original_name', ''),
                         'poster': format_poster(t.get('poster_path')),
@@ -291,6 +379,7 @@ def get_home():
         except Exception as e:
             print(f"⚠️ Trending TV Error: {e}")
 
+        # 3. Top Rated Movies
         try:
             top_res = requests.get(
                 f'{TMDB_BASE_URL}/movie/top_rated?api_key={TMDB_API_KEY}&language=ar-SA',
@@ -301,7 +390,7 @@ def get_home():
                 top_rated_movies = [
                     {
                         'id': str(m.get('id', '')),
-                        'url': f"https://a.qfilm.tv/search.php?keywords={quote(m.get('original_title') or m.get('title', ''))}",
+                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(m.get('original_title') or m.get('title', ''))}",
                         'title': m.get('title') or m.get('original_title', ''),
                         'original_title': m.get('original_title', ''),
                         'poster': format_poster(m.get('poster_path')),
@@ -316,6 +405,7 @@ def get_home():
         except Exception as e:
             print(f"⚠️ Top Rated Error: {e}")
 
+        # 4. Classic Documentaries
         try:
             docs_url = (
                 f'{TMDB_BASE_URL}/discover/movie?api_key={TMDB_API_KEY}'
@@ -327,7 +417,7 @@ def get_home():
                 classic_docs = [
                     {
                         'id': str(m.get('id', '')),
-                        'url': f"https://a.qfilm.tv/search.php?keywords={quote(m.get('original_title') or m.get('title', ''))}",
+                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(m.get('original_title') or m.get('title', ''))}",
                         'title': m.get('title') or m.get('original_title', ''),
                         'original_title': m.get('original_title', ''),
                         'poster': format_poster(m.get('poster_path')),
@@ -342,6 +432,18 @@ def get_home():
         except Exception as e:
             print(f"⚠️ Classic Docs Error: {e}")
 
+        # احتياط Akwam المباشر
+        if not trending_movies:
+            res_m = requests.get(f'{AKWAM_BASE_DOMAIN}/movies', headers=get_akwam_headers(), timeout=3)
+            soup_m = BeautifulSoup(res_m.text, 'html.parser')
+            trending_movies = parse_akwam_cards(soup_m)[:10]
+
+        if not trending_tv:
+            res_t = requests.get(f'{AKWAM_BASE_DOMAIN}/series', headers=get_akwam_headers(), timeout=3)
+            soup_t = BeautifulSoup(res_t.text, 'html.parser')
+            trending_tv = parse_akwam_cards(soup_t)[:10]
+
+        # بناء قائمة الأقسام المعروضة
         sections_list = [
             {
                 'key': 'trending_movies',
@@ -362,7 +464,7 @@ def get_home():
         if top_rated_movies:
             sections_list.append({
                 'key': 'top_rated_movies',
-                'title': '⭐ الأعلى تقييماً',
+                'title': '⭐ الأفلام الأعلى تقييماً',
                 'has_see_all': False,
                 'see_all_params': {},
                 'items': top_rated_movies,
@@ -390,7 +492,7 @@ def get_home():
 
 
 # ==============================================================================
-# 4. باقي المسارات (Catalog, Search, Series Details, Movie Details)
+# 4. مسار الكتالوج والفلترة
 # ==============================================================================
 
 @app.route('/api/catalog', methods=['GET'])
@@ -455,6 +557,10 @@ def get_catalog():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+# ==============================================================================
+# 5. مسار البحث الشامل عبر TMDB
+# ==============================================================================
+
 @app.route('/api/search', methods=['GET'])
 def search():
     query = request.args.get('q', '')
@@ -486,12 +592,15 @@ def search():
 
                 search_target = orig_title if orig_title else title
                 sources = {
+                    'akwam': f"{AKWAM_BASE_DOMAIN}/search?q={quote(search_target)}",
+                    'larroza': f"{LARROZA_BASE_DOMAIN}/search.php?keywords={quote(search_target)}",
+                    'moviz-time': f"https://moviz-time.site/?s={quote(search_target)}",
                     'qfilm': f"https://a.qfilm.tv/search.php?keywords={quote(search_target)}"
                 }
 
                 items.append({
                     'id': str(item.get('id', '')),
-                    'url': sources['qfilm'],
+                    'url': sources['akwam'],
                     'sources': sources,
                     'title': title,
                     'original_title': orig_title,
@@ -511,6 +620,10 @@ def search():
         return jsonify({'status': 'success', 'data': []})
 
 
+# ==============================================================================
+# 6. مسار تفاصيل المسلسلات والمواسم والحلقات
+# ==============================================================================
+
 @app.route('/api/series-details', methods=['GET'])
 def get_series_details():
     series_url = request.args.get('url', '').strip()
@@ -529,6 +642,99 @@ def get_series_details():
         clean_tmdb_id = tmdb_id
     elif series_url and series_url.isdigit():
         clean_tmdb_id = series_url
+
+    if series_url and series_url.startswith('http') and '/series/' in series_url:
+        try:
+            target_url = safe_url(series_url)
+            res = requests.get(target_url, headers=get_akwam_headers(target_url), timeout=4)
+            if res.status_code == 200:
+                soup = BeautifulSoup(res.text, 'html.parser')
+
+                season_links = soup.select('a[href*="/series/"]')
+                seasons = []
+                seen_seasons = set()
+                for s in season_links:
+                    s_href = s['href']
+                    if not s_href.startswith('http'):
+                        s_href = f"{AKWAM_BASE_DOMAIN}/{s_href.lstrip('/')}"
+                    if s_href not in seen_seasons and s_href != series_url:
+                        seen_seasons.add(s_href)
+                        seasons.append({'title': s.get_text(strip=True) or 'موسم', 'url': s_href})
+
+                episode_cards = soup.select('a[href*="/episode/"]')
+                episodes = []
+                seen_episodes = set()
+                for ep in episode_cards:
+                    ep_href = ep['href']
+                    if not ep_href.startswith('http'):
+                        ep_href = f"{AKWAM_BASE_DOMAIN}/{ep_href.lstrip('/')}"
+                    if ep_href not in seen_episodes:
+                        seen_episodes.add(ep_href)
+                        episodes.append({'title': ep.get_text(strip=True), 'url': ep_href})
+
+                if episodes or seasons:
+                    res_data = {
+                        'status': 'success',
+                        'data': {'seasons': seasons, 'episodes': episodes},
+                    }
+                    set_cached(cache_key, res_data)
+                    return jsonify(res_data)
+        except Exception as e:
+            print(f'⚠️ Akwam Direct Series Error: {e}')
+
+    search_term = orig_title or title
+    if not search_term and '/search' in series_url and 'q=' in series_url:
+        try:
+            search_term = unquote(series_url.split('q=')[1].split('&')[0])
+        except Exception:
+            pass
+
+    if search_term:
+        try:
+            search_req_url = f'{AKWAM_BASE_DOMAIN}/search?q={quote(search_term)}'
+            res_search = requests.get(search_req_url, headers=get_akwam_headers(), timeout=4)
+            if res_search.status_code == 200:
+                soup_search = BeautifulSoup(res_search.text, 'html.parser')
+                card = soup_search.select_one('a[href*="/series/"]')
+                if card and card.get('href'):
+                    real_series_url = card['href']
+                    if not real_series_url.startswith('http'):
+                        real_series_url = f"{AKWAM_BASE_DOMAIN}/{real_series_url.lstrip('/')}"
+
+                    res_real = requests.get(safe_url(real_series_url), headers=get_akwam_headers(real_series_url), timeout=4)
+                    soup_real = BeautifulSoup(res_real.text, 'html.parser')
+
+                    season_links = soup_real.select('a[href*="/series/"]')
+                    seasons = []
+                    seen_seasons = set()
+                    for s in season_links:
+                        s_href = s['href']
+                        if not s_href.startswith('http'):
+                            s_href = f"{AKWAM_BASE_DOMAIN}/{s_href.lstrip('/')}"
+                        if s_href not in seen_seasons and s_href != real_series_url:
+                            seen_seasons.add(s_href)
+                            seasons.append({'title': s.get_text(strip=True) or 'موسم', 'url': s_href})
+
+                    episode_cards = soup_real.select('a[href*="/episode/"]')
+                    episodes = []
+                    seen_episodes = set()
+                    for ep in episode_cards:
+                        ep_href = ep['href']
+                        if not ep_href.startswith('http'):
+                            ep_href = f"{AKWAM_BASE_DOMAIN}/{ep_href.lstrip('/')}"
+                        if ep_href not in seen_episodes:
+                            seen_episodes.add(ep_href)
+                            episodes.append({'title': ep.get_text(strip=True), 'url': ep_href})
+
+                    if episodes or seasons:
+                        res_data = {
+                            'status': 'success',
+                            'data': {'seasons': seasons, 'episodes': episodes},
+                        }
+                        set_cached(cache_key, res_data)
+                        return jsonify(res_data)
+        except Exception as e:
+            print(f'⚠️ Akwam Search Resolution Error: {e}')
 
     if clean_tmdb_id:
         try:
@@ -586,6 +792,10 @@ def get_series_details():
         'message': 'لم يتم العثور على حلقات لهذا المسلسل',
     })
 
+
+# ==============================================================================
+# 7. مسار تفاصيل الأفلام
+# ==============================================================================
 
 @app.route('/api/movie-details', methods=['GET'])
 def get_movie_details():
