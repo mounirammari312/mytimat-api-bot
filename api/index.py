@@ -161,7 +161,7 @@ def parse_akwam_cards(soup):
 
 
 # ==============================================================================
-# 2. مسارات التشخيص والإعدادات (المرحلة 4: دعم Cloud Micro-Scripts)
+# 2. مسارات التشخيص والإعدادات
 # ==============================================================================
 
 @app.route('/', methods=['GET'])
@@ -204,7 +204,7 @@ def test_redis_debug():
         return jsonify({"status": "error", "exception_message": str(e)}), 500
 
 
-     @app.route('/api/config', methods=['GET'])
+@app.route('/api/config', methods=['GET'])
 def get_config():
     return jsonify({
         'status': 'success',
@@ -228,20 +228,8 @@ def get_config():
     })
 
 
-
-
-
-
-
-            
-
-
-
 # ==============================================================================
-# 3. مسار الرئيسية (4 أقسام + الاعتماد على الاسم الأصلي أولاً)
-# ==============================================================================
-# ==============================================================================
-# 3. مسار الرئيسية المطور (Server-Driven UI الديناميكي)
+# 3. مسار الرئيسية (Server-Driven UI الديناميكي)
 # ==============================================================================
 
 def fetch_tmdb_discover(endpoint_path, query_params, media_type, default_tag='TMDB', limit=10):
@@ -254,14 +242,14 @@ def fetch_tmdb_discover(endpoint_path, query_params, media_type, default_tag='TM
             for item in res.json().get('results', [])[:limit]:
                 if not item.get('poster_path'):
                     continue
-                
+
                 title = item.get('title') or item.get('name') or item.get('original_title') or item.get('original_name', '')
                 orig_title = item.get('original_title') or item.get('original_name', '')
                 release_date = item.get('release_date') or item.get('first_air_date', '')
                 year = str(release_date)[:4] if release_date else ''
-                
+
                 search_query = quote(orig_title if orig_title else title)
-                
+
                 items.append({
                     'id': str(item.get('id', '')),
                     'url': f"{AKWAM_BASE_DOMAIN}/search?q={search_query}",
@@ -289,7 +277,6 @@ def get_home():
     try:
         sections_list = []
 
-        # 1. 🔥 الأفلام الأكثر شهرة (Trending Movies)
         trending_movies = fetch_tmdb_discover('trending/movie/week', '', 'movie', '🔥 رائج')
         if not trending_movies:
             res_m = requests.get(f'{AKWAM_BASE_DOMAIN}/movies', headers=get_akwam_headers(), timeout=3)
@@ -304,7 +291,6 @@ def get_home():
             'items': trending_movies,
         })
 
-        # 2. 📺 المسلسلات الأكثر مشاهدة (Trending TV)
         trending_tv = fetch_tmdb_discover('trending/tv/week', '', 'tv', '📺 مسلسلات')
         if not trending_tv:
             res_t = requests.get(f'{AKWAM_BASE_DOMAIN}/series', headers=get_akwam_headers(), timeout=3)
@@ -319,7 +305,6 @@ def get_home():
             'items': trending_tv,
         })
 
-        # 3. 💥 أفلام الحركة والأكشن (Action Movies)
         action_movies = fetch_tmdb_discover(
             'discover/movie',
             'with_genres=28&sort_by=popularity.desc&vote_count.gte=100',
@@ -335,7 +320,6 @@ def get_home():
                 'items': action_movies,
             })
 
-        # 4. 🎨 سينما الرسوم المتحركة والأنمي (Animation & Family)
         animation_movies = fetch_tmdb_discover(
             'discover/movie',
             'with_genres=16,10751&sort_by=popularity.desc&vote_count.gte=50',
@@ -351,7 +335,6 @@ def get_home():
                 'items': animation_movies,
             })
 
-        # 5. 🇰🇷 الدراما الكورية (K-Drama)
         korean_drama = fetch_tmdb_discover(
             'discover/tv',
             'with_original_language=ko&sort_by=popularity.desc&vote_count.gte=20',
@@ -367,7 +350,6 @@ def get_home():
                 'items': korean_drama,
             })
 
-        # 6. ⭐ الأفلام الأعلى تقييماً (Top Rated)
         top_rated_movies = fetch_tmdb_discover(
             'movie/top_rated',
             'vote_count.gte=500',
@@ -383,7 +365,6 @@ def get_home():
                 'items': top_rated_movies,
             })
 
-        # 7. 📜 أفلام وثائقية قديمة (Classic Docs)
         classic_docs = fetch_tmdb_discover(
             'discover/movie',
             'with_genres=99&primary_release_date.lte=1995-01-01&sort_by=vote_average.desc&vote_count.gte=10',
@@ -404,20 +385,11 @@ def get_home():
             'data': sections_list
         }
 
-        # تخزين النتيجة المكتملة في Upstash Redis
         set_cached(CACHE_KEY, result)
         return jsonify(result)
 
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
-                    
-
-        
-
-
-
 
 
 # ==============================================================================
@@ -802,7 +774,6 @@ def get_movie_details():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-
 # ==============================================================================
 # 8. استخراج البث المباشر (سيرفرات Raphael / Flaxfer) مع دعم كاش Redis
 # ==============================================================================
@@ -834,7 +805,6 @@ def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
             if res.status_code == 200:
                 data = res.json()
                 if data.get("success"):
-                    # رابط البث الأساسي
                     stream_obj = data.get("stream")
                     stream_url = stream_obj.get("url") if isinstance(stream_obj, dict) else stream_obj
                     if stream_url:
@@ -844,7 +814,6 @@ def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
                             "type": "m3u8"
                         })
 
-                    # السيرفرات البديلة
                     for s in data.get("sources", []):
                         s_url = s.get("url")
                         if s_url and s_url != stream_url:
@@ -854,7 +823,6 @@ def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
                                 "type": "m3u8"
                             })
 
-                    # ملفات الترجمة (العربية والإنجليزية)
                     for sub in data.get("subtitles", []):
                         sub_url = sub.get("url")
                         sub_lang = (sub.get("label") or sub.get("language") or "").lower()
@@ -871,7 +839,6 @@ def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
             continue
 
     return {"streams": streams, "subtitles": subtitles}
-
 
 
 @app.route('/api/source', methods=['GET'])
@@ -903,8 +870,8 @@ def get_stream_source():
 
     res_data = {
         'status': 'success' if formatted_links else 'not_found',
-        'links': formatted_links,       # المفتاح الأساسي الذي يقرأه تطبيق الأندرويد
-        'streams': result['streams'],   # للتوافق المستقبلي
+        'links': formatted_links,
+        'streams': result['streams'],
         'subtitles': result['subtitles']
     }
 
@@ -912,9 +879,6 @@ def get_stream_source():
         set_cached(cache_key, res_data, ttl=7200)
 
     return jsonify(res_data)
-
-
-
 
 
 if __name__ == '__main__':
