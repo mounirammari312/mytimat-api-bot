@@ -796,6 +796,10 @@ def get_movie_details():
 # 8. مزود البث العام الديناميكي (Raphael Provider)
 # ==============================================================================
 
+# ==============================================================================
+# 8. مزود البث العام الديناميكي (Raphael Provider) - نسخة معالجة التشفير والحلقات
+# ==============================================================================
+
 def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36',
@@ -803,10 +807,15 @@ def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
         'Origin': 'https://flaxfer.lol'
     }
 
-    if str(media_type).lower() in ["tv", "series"]:
-        query = f"id={tmdb_id}&type=tv&season={season}&episode={episode}"
-    else:
-        query = f"id={tmdb_id}&type=movie"
+    # تحويل الأرقام إلى أعداد صحيحة لتفادي رفض خوادم البث (مثل 01 إلى 1)
+    try:
+        s_num = int(season)
+        e_num = int(episode)
+    except (ValueError, TypeError):
+        s_num, e_num = 1, 1
+
+    is_series = str(media_type).lower() in ["tv", "series", "episode"]
+    query = f"id={tmdb_id}&type=tv&season={s_num}&episode={e_num}" if is_series else f"id={tmdb_id}&type=movie"
 
     endpoints = [
         f"https://stela.raphsm4.dev/resolve?{query}",
@@ -820,25 +829,46 @@ def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
             if res.status_code == 200:
                 data = res.json()
                 if data.get("success"):
+                    # 1. فحص روابط الجودات المتعددة إن وجدت
                     stream_obj = data.get("stream")
-                    stream_url = stream_obj.get("url") if isinstance(stream_obj, dict) else stream_obj
-                    if stream_url:
+                    stream_url = None
+
+                    if isinstance(stream_obj, dict):
+                        stream_url = stream_obj.get("url")
+                        # استخراج الجودات الفرعية إن كانت مصفوفة أو قاموس
+                        qualities = stream_obj.get("qualities") or {}
+                        for q_label, q_url in qualities.items():
+                            if q_url:
+                                formatted_links.append({
+                                    "url": q_url,
+                                    "quality": int(str(q_label).replace('p', '')) if str(q_label).replace('p', '').isdigit() else 720,
+                                    "source": f"Raphael {q_label}",
+                                    "referer": "https://flaxfer.lol/"
+                                })
+                    elif isinstance(stream_obj, str):
+                        stream_url = stream_obj
+
+                    # 2. إضافة الرابط الأساسي
+                    if stream_url and not any(l['url'] == stream_url for l in formatted_links):
                         formatted_links.append({
                             "url": stream_url,
-                            "quality": 1080,
-                            "source": data.get("source") or "Raphael Fast",
+                            "quality": 720,  # نضعه 720p لضمان فك تشفيره على جميع المعالجات بسلاسة
+                            "source": data.get("source") or "Raphael Fast (H.264)",
                             "referer": "https://flaxfer.lol/"
                         })
 
+                    # 3. إضافة السيرفرات البديلة (Sources)
                     for s in data.get("sources", []):
-                        s_url = s.get("url")
-                        if s_url and s_url != stream_url:
+                        s_url = s.get("url") if isinstance(s, dict) else s
+                        if s_url and not any(l['url'] == s_url for l in formatted_links):
+                            s_name = s.get("name") or s.get("source") or "Raphael Backup"
                             formatted_links.append({
                                 "url": s_url,
-                                "quality": 720,
-                                "source": s.get("name") or "Raphael Backup",
+                                "quality": 1080 if "1080" in s_name else 720,
+                                "source": s_name,
                                 "referer": "https://flaxfer.lol/"
                             })
+
                     if formatted_links:
                         break
         except Exception:
