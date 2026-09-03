@@ -210,7 +210,6 @@ def get_config():
         'status': 'success',
         'version': '9.10.0-Production',
         'providers': [
-           
             {
                 'name': 'raphael',
                 'domain': 'https://mytimat-api-bot.vercel.app',
@@ -225,6 +224,7 @@ def get_config():
                 'requires_unpack': False,
                 'ajax_required': False,
             },
+           
         ],
     })
 
@@ -796,10 +796,6 @@ def get_movie_details():
 # 8. مزود البث العام الديناميكي (Raphael Provider)
 # ==============================================================================
 
-# ==============================================================================
-# 8. مزود البث العام الديناميكي (Raphael Provider) - نسخة معالجة التشفير والحلقات
-# ==============================================================================
-
 def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36',
@@ -807,7 +803,6 @@ def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
         'Origin': 'https://flaxfer.lol'
     }
 
-    # تحويل الأرقام إلى أعداد صحيحة لتفادي رفض خوادم البث (مثل 01 إلى 1)
     try:
         s_num = int(season)
         e_num = int(episode)
@@ -829,13 +824,11 @@ def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
             if res.status_code == 200:
                 data = res.json()
                 if data.get("success"):
-                    # 1. فحص روابط الجودات المتعددة إن وجدت
                     stream_obj = data.get("stream")
                     stream_url = None
 
                     if isinstance(stream_obj, dict):
                         stream_url = stream_obj.get("url")
-                        # استخراج الجودات الفرعية إن كانت مصفوفة أو قاموس
                         qualities = stream_obj.get("qualities") or {}
                         for q_label, q_url in qualities.items():
                             if q_url:
@@ -848,16 +841,14 @@ def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
                     elif isinstance(stream_obj, str):
                         stream_url = stream_obj
 
-                    # 2. إضافة الرابط الأساسي
                     if stream_url and not any(l['url'] == stream_url for l in formatted_links):
                         formatted_links.append({
                             "url": stream_url,
-                            "quality": 720,  # نضعه 720p لضمان فك تشفيره على جميع المعالجات بسلاسة
+                            "quality": 720,
                             "source": data.get("source") or "Raphael Fast (H.264)",
                             "referer": "https://flaxfer.lol/"
                         })
 
-                    # 3. إضافة السيرفرات البديلة (Sources)
                     for s in data.get("sources", []):
                         s_url = s.get("url") if isinstance(s, dict) else s
                         if s_url and not any(l['url'] == s_url for l in formatted_links):
