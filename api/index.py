@@ -1,10 +1,16 @@
-
 from urllib.parse import quote, unquote, urlparse
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
 import requests
 import json
 import re
+
+# استيراد محرك التخفي وانتحال بصمة TLS/JA3 مع Fallback لمكتبة requests
+try:
+    from curl_cffi import requests as stealth_requests
+    HAS_CURL_CFFI = True
+except ImportError:
+    HAS_CURL_CFFI = False
 
 # ==============================================================================
 # 🛠️ إعدادات التطبيق والسيرفر الرئيسي (Vercel Entrypoint)
@@ -56,12 +62,82 @@ def set_cached(key, data, ttl=CACHE_TTL_SECONDS):
 TMDB_HEADERS = {
     'User-Agent': (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-        '(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
     ),
     'Accept': 'application/json',
 }
 
 LARROZA_BASE_DOMAIN = 'https://larroza.mom'
+
+
+# ==============================================================================
+# 🥷 التقنية 2: محرك انتحال بصمة المتصفح (TLS / JA3 Spoofing)
+# ==============================================================================
+
+def stealth_fetch(url, referer=None):
+    """طلب فائق التخفي يطابق بصمة Google Chrome 124 الثنائية لتجاوز جدران الحماية."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "ar,en-US;q=0.9,en;q=0.8",
+        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1"
+    }
+    if referer:
+        headers["Referer"] = referer
+
+    if HAS_CURL_CFFI:
+        return stealth_requests.get(
+            url,
+            headers=headers,
+            impersonate="chrome124",
+            timeout=8,
+            allow_redirects=True
+        )
+    return requests.get(url, headers=headers, timeout=8, allow_redirects=True)
+
+
+# ==============================================================================
+# 🏦 التقنية 4: مستودع الجلسات السحابي المشترك (Shared Session Vault)
+# ==============================================================================
+
+def get_vault_session(site_key, target_url):
+    """استرجاع هوية جلسة صالحة ومفحوصة من Redis، أو تجديدها آلياً دون حظر."""
+    cache_key = f"vault:session:{site_key}"
+    cached_session = get_cached(cache_key)
+    if cached_session:
+        return cached_session
+
+    try:
+        res = stealth_fetch(target_url)
+        if res.status_code in [200, 301, 302]:
+            cookies_dict = res.cookies.get_dict() if hasattr(res.cookies, "get_dict") else dict(res.cookies)
+            cookie_parts = [f"{k}={v}" for k, v in cookies_dict.items()]
+            cookie_header = "; ".join(cookie_parts)
+
+            vault_data = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Cookie": cookie_header,
+                "Referer": f"{target_url.rstrip('/')}/"
+            }
+
+            # حفظ الهوية السحابية في Redis لمدة ساعتين
+            set_cached(cache_key, vault_data, ttl=2 * 3600)
+            return vault_data
+    except Exception as e:
+        print(f"⚠️ Vault Session Error for {site_key}: {e}")
+
+    # Fallback افتراضي شفاف في حال فشل الجلب
+    return {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": f"{target_url.rstrip('/')}/"
+    }
 
 
 # ==============================================================================
@@ -170,11 +246,12 @@ def index():
     return jsonify({
         'status': 'online',
         'mode': 'JSON Rules Engine + QuickJS Micro-Scripts + Upstash Redis Cache',
+        'tls_impersonate': 'Chrome 124 (Active)' if HAS_CURL_CFFI else 'Standard Requests',
         'active_domains': {
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '9.10.0-Production',
+        'version': '10.5.0-Production',
     })
 
 
@@ -206,9 +283,15 @@ def test_redis_debug():
 
 @app.route('/api/config', methods=['GET'])
 def get_config():
+    # استخراج الجلسات النشطة من المستودع لتزويد التطبيق بها
+    akwam_headers = get_vault_session("akwam", AKWAM_BASE_DOMAIN)
+    larroza_headers = get_vault_session("larroza", LARROZA_BASE_DOMAIN)
+    moviz_headers = get_vault_session("moviz", "https://moviz-time.site")
+    qfilm_headers = get_vault_session("qfilm", "https://a.qfilm.tv")
+
     return jsonify({
         'status': 'success',
-        'version': '9.10.0-Production',
+        'version': '10.5.0-Production',
         'providers': [
             {
                 'name': 'akwam',
@@ -220,6 +303,7 @@ def get_config():
                 'watch_selector': 'a[href*=/watch/], a.link-btn',
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
                 'requires_unpack': False,
+                'active_headers': akwam_headers,
                 'extractor_script': r"""
                     (function() {
                         var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:mp4)[^\s"'<>]*/i);
@@ -242,6 +326,7 @@ def get_config():
                 'iframe_selector': 'iframe',
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'requires_unpack': True,
+                'active_headers': larroza_headers,
                 'extractor_script': r"""
                     (function() {
                         var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
@@ -267,6 +352,7 @@ def get_config():
                 'requires_unpack': True,
                 'ajax_required': True,
                 'series_selector': 'a[href*="/series/"]',
+                'active_headers': moviz_headers,
                 'extractor_script': r"""
                     (function() {
                         var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4|txt)[^\s"'<>]*/i);
@@ -292,6 +378,7 @@ def get_config():
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'ajax_required': True,
                 'requires_unpack': False,
+                'active_headers': qfilm_headers,
                 'extractor_script': r"""
                     (function() {
                         var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
@@ -867,9 +954,8 @@ def get_movie_details():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-
 # ==============================================================================
-# كاش صفحات المشاهدة المشترك (Watch Page Cache)
+# 8. كاش صفحات المشاهدة المشترك (Watch Page Cache)
 # ==============================================================================
 
 @app.route('/api/page-cache', methods=['GET', 'POST'])
@@ -894,6 +980,6 @@ def handle_page_cache():
         return jsonify({'status': 'error', 'message': 'Invalid payload'}), 400
 
 
-
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
+
