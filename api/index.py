@@ -867,5 +867,33 @@ def get_movie_details():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+
+# ==============================================================================
+# كاش صفحات المشاهدة المشترك (Watch Page Cache)
+# ==============================================================================
+
+@app.route('/api/page-cache', methods=['GET', 'POST'])
+def handle_page_cache():
+    if request.method == 'GET':
+        cache_key = request.args.get('key')
+        if not cache_key:
+            return jsonify({'status': 'error', 'message': 'Missing key'}), 400
+
+        cached_url = get_cached(f"page:{cache_key}")
+        return jsonify({'status': 'success', 'url': cached_url})
+
+    elif request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        cache_key = data.get('key')
+        target_url = data.get('url')
+
+        if cache_key and target_url:
+            set_cached(f"page:{cache_key}", target_url, ttl=48 * 3600)
+            return jsonify({'status': 'success', 'message': 'Cached successfully'})
+
+        return jsonify({'status': 'error', 'message': 'Invalid payload'}), 400
+
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
