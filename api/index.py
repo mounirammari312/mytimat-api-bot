@@ -210,101 +210,20 @@ def get_config():
         'status': 'success',
         'version': '9.10.0-Production',
         'providers': [
+           
             {
-                'name': 'akwam',
-                'domain': AKWAM_BASE_DOMAIN,
-                'search_path': '/search?q={query}',
-                'movie_selector': 'a[href*=/movie/]',
-                'series_selector': 'a[href*=/series/]',
-                'ep_selector': 'a[href*=/episode/]',
-                'watch_selector': 'a[href*=/watch/], a.link-btn',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
-                'requires_unpack': False,
-                'extractor_script': r"""
-                    (function() {
-                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:mp4)[^\s"'<>]*/i);
-                        if (match) {
-                            return {
-                                url: match[0],
-                                referer: __PAGE_URL__,
-                                quality: '1080p FHD'
-                            };
-                        }
-                        return null;
-                    })();
-                """
-            },
-            {
-                'name': 'larroza',
-                'domain': LARROZA_BASE_DOMAIN,
-                'search_path': '/search.php?keywords={query}',
-                'card_selector': 'a[href*=video.php]',
-                'iframe_selector': 'iframe',
+                'name': 'raphael',
+                'domain': 'https://mytimat-api-bot.vercel.app',
+                'search_path': '/api/source?id={tmdb_id}&type={type}&season={season}&episode={episode}',
+                'card_selector': '',
+                'movie_selector': '',
+                'series_selector': '',
+                'watch_selector': '',
+                'iframe_selector': '',
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-                'requires_unpack': True,
-                'extractor_script': r"""
-                    (function() {
-                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
-                        if (match) {
-                            return {
-                                url: match[0],
-                                referer: __PAGE_URL__,
-                                quality: match[0].indexOf('.m3u8') !== -1 ? 'HLS' : '1080p'
-                            };
-                        }
-                        return null;
-                    })();
-                """
-            },
-            {
-                'name': 'moviz-time',
-                'domain': 'https://moviz-time.site',
-                'search_path': '/?s={query}',
-                'card_selector': 'a[href*="/watch/"], a[href*="/series/"], article.post a',
-                'watch_selector': 'iframe, [data-link], [data-url], [data-post], .single_tab, .play-btn, .server-item',
-                'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link]',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
-                'requires_unpack': True,
-                'ajax_required': True,
-                'series_selector': 'a[href*="/series/"]',
-                'extractor_script': r"""
-                    (function() {
-                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4|txt)[^\s"'<>]*/i);
-                        if (match) {
-                            return {
-                                url: match[0],
-                                referer: __PAGE_URL__,
-                                quality: 'Auto'
-                            };
-                        }
-                        return null;
-                    })();
-                """
-            },
-            {
-                'name': 'qfilm',
-                'domain': 'https://a.qfilm.tv',
-                'search_path': '/search.php?keywords={query}',
-                'card_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"], .pm-search-results a[href*="watch.php"]',
-                'movie_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"]',
-                'series_selector': 'a[href*="series.php"], a[href*="watch.php"]',
-                'iframe_selector': 'iframe',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-                'ajax_required': True,
+                'tmdb_mode': True,
                 'requires_unpack': False,
-                'extractor_script': r"""
-                    (function() {
-                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
-                        if (match) {
-                            return {
-                                url: match[0],
-                                referer: __PAGE_URL__,
-                                quality: 'HD'
-                            };
-                        }
-                        return null;
-                    })();
-                """
+                'ajax_required': False,
             },
         ],
     })
@@ -871,6 +790,88 @@ def get_movie_details():
         return jsonify(result)
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ==============================================================================
+# 8. مزود البث العام الديناميكي (Raphael Provider)
+# ==============================================================================
+
+def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36',
+        'Referer': 'https://flaxfer.lol/',
+        'Origin': 'https://flaxfer.lol'
+    }
+
+    if str(media_type).lower() in ["tv", "series"]:
+        query = f"id={tmdb_id}&type=tv&season={season}&episode={episode}"
+    else:
+        query = f"id={tmdb_id}&type=movie"
+
+    endpoints = [
+        f"https://stela.raphsm4.dev/resolve?{query}",
+        f"https://api.vz.raphsm4.dev/resolve?{query}"
+    ]
+
+    formatted_links = []
+    for url in endpoints:
+        try:
+            res = requests.get(url, headers=headers, timeout=6)
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("success"):
+                    stream_obj = data.get("stream")
+                    stream_url = stream_obj.get("url") if isinstance(stream_obj, dict) else stream_obj
+                    if stream_url:
+                        formatted_links.append({
+                            "url": stream_url,
+                            "quality": 1080,
+                            "source": data.get("source") or "Raphael Fast",
+                            "referer": "https://flaxfer.lol/"
+                        })
+
+                    for s in data.get("sources", []):
+                        s_url = s.get("url")
+                        if s_url and s_url != stream_url:
+                            formatted_links.append({
+                                "url": s_url,
+                                "quality": 720,
+                                "source": s.get("name") or "Raphael Backup",
+                                "referer": "https://flaxfer.lol/"
+                            })
+                    if formatted_links:
+                        break
+        except Exception:
+            continue
+
+    return formatted_links
+
+
+@app.route('/api/source', methods=['GET'])
+def get_stream_source():
+    tmdb_id = request.args.get('id') or request.args.get('tmdb_id')
+    media_type = request.args.get('type', 'movie')
+    season = request.args.get('season', 1)
+    episode = request.args.get('episode', 1)
+
+    if not tmdb_id:
+        return jsonify({'status': 'error', 'message': 'Missing TMDB ID'}), 400
+
+    cache_key = f"source:raphael:{tmdb_id}:{media_type}:{season}:{episode}"
+    cached = get_cached(cache_key)
+    if cached is not None:
+        return jsonify(cached)
+
+    links = extract_raphael_streams(tmdb_id, media_type, season, episode)
+    res_data = {
+        'status': 'success' if links else 'not_found',
+        'links': links
+    }
+
+    if links:
+        set_cached(cache_key, res_data, ttl=7200)
+
+    return jsonify(res_data)
 
 
 if __name__ == '__main__':
