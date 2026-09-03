@@ -293,6 +293,40 @@ def get_config():
         'status': 'success',
         'version': '10.5.0-Production',
         'providers': [
+
+            {
+                'name': 'vumoo',
+                'domain': 'https://vumoo.to',
+                'search_path': '/search?q={query}',
+                'card_selector': 'div.video-item a, div.poster a, .film-detail a',
+                'movie_selector': 'a[href*="/movie/"]',
+                'series_selector': 'a[href*="/tv/"]',
+                'watch_selector': 'iframe, [data-src], .play-btn',
+                'iframe_selector': 'iframe',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+                'requires_unpack': True,
+                'ajax_required': False,
+                'active_headers': get_vault_session("vumoo", "https://vumoo.to"),
+                'extractor_script': r"""
+                    (function() {
+                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
+                        if (match) {
+                            return {
+                                url: match[0],
+                                referer: __PAGE_URL__,
+                                quality: match[0].indexOf('.m3u8') !== -1 ? 'Auto HLS' : '1080p English'
+                            };
+                        }
+                        return null;
+                    })();
+                """
+            },
+
+
+
+
+
+            
             {
                 'name': 'akwam',
                 'domain': AKWAM_BASE_DOMAIN,
@@ -676,8 +710,10 @@ def search():
                     'akwam': f"{AKWAM_BASE_DOMAIN}/search?q={quote(search_target)}",
                     'larroza': f"{LARROZA_BASE_DOMAIN}/search.php?keywords={quote(search_target)}",
                     'moviz-time': f"https://moviz-time.site/?s={quote(search_target)}",
-                    'qfilm': f"https://a.qfilm.tv/search.php?keywords={quote(search_target)}"
+                    'qfilm': f"https://a.qfilm.tv/search.php?keywords={quote(search_target)}",
+                    'vumoo': f"https://vumoo.to/search?q={quote(search_target)}"
                 }
+
 
                 items.append({
                     'id': str(item.get('id', '')),
