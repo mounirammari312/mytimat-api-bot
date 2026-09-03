@@ -161,7 +161,7 @@ def parse_akwam_cards(soup):
 
 
 # ==============================================================================
-# 2. مسارات التشخيص والإعدادات (المرحلة 4: دعم Cloud Micro-Scripts)
+# 2. مسارات التشخيص والإعدادات
 # ==============================================================================
 
 @app.route('/', methods=['GET'])
@@ -179,7 +179,6 @@ def index():
 
 @app.route('/api/test-redis', methods=['GET'])
 def test_redis_debug():
-    """مسار فحص وتحديد أخطاء الاتصال بـ Upstash Redis مباشرة"""
     try:
         headers = {"Authorization": f"Bearer {UPSTASH_REDIS_REST_TOKEN}"}
         set_res = requests.post(
@@ -224,13 +223,108 @@ def get_config():
                 'requires_unpack': False,
                 'ajax_required': False,
             },
-           
+            {
+                'name': 'akwam',
+                'domain': AKWAM_BASE_DOMAIN,
+                'search_path': '/search?q={query}',
+                'movie_selector': 'a[href*=/movie/]',
+                'series_selector': 'a[href*=/series/]',
+                'ep_selector': 'a[href*=/episode/]',
+                'watch_selector': 'a[href*=/watch/], a.link-btn',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
+                'requires_unpack': False,
+                'extractor_script': r"""
+                    (function() {
+                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:mp4)[^\s"'<>]*/i);
+                        if (match) {
+                            return {
+                                url: match[0],
+                                referer: __PAGE_URL__,
+                                quality: '1080p FHD'
+                            };
+                        }
+                        return null;
+                    })();
+                """
+            },
+            {
+                'name': 'larroza',
+                'domain': LARROZA_BASE_DOMAIN,
+                'search_path': '/search.php?keywords={query}',
+                'card_selector': 'a[href*=video.php]',
+                'iframe_selector': 'iframe',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+                'requires_unpack': True,
+                'extractor_script': r"""
+                    (function() {
+                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
+                        if (match) {
+                            return {
+                                url: match[0],
+                                referer: __PAGE_URL__,
+                                quality: match[0].indexOf('.m3u8') !== -1 ? 'HLS' : '1080p'
+                            };
+                        }
+                        return null;
+                    })();
+                """
+            },
+            {
+                'name': 'moviz-time',
+                'domain': 'https://moviz-time.site',
+                'search_path': '/?s={query}',
+                'card_selector': 'a[href*="/watch/"], a[href*="/series/"], article.post a',
+                'watch_selector': 'iframe, [data-link], [data-url], [data-post], .single_tab, .play-btn, .server-item',
+                'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link]',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
+                'requires_unpack': True,
+                'ajax_required': True,
+                'series_selector': 'a[href*="/series/"]',
+                'extractor_script': r"""
+                    (function() {
+                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4|txt)[^\s"'<>]*/i);
+                        if (match) {
+                            return {
+                                url: match[0],
+                                referer: __PAGE_URL__,
+                                quality: 'Auto'
+                            };
+                        }
+                        return null;
+                    })();
+                """
+            },
+            {
+                'name': 'qfilm',
+                'domain': 'https://a.qfilm.tv',
+                'search_path': '/search.php?keywords={query}',
+                'card_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"], .pm-search-results a[href*="watch.php"]',
+                'movie_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"]',
+                'series_selector': 'a[href*="series.php"], a[href*="watch.php"]',
+                'iframe_selector': 'iframe',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+                'ajax_required': True,
+                'requires_unpack': False,
+                'extractor_script': r"""
+                    (function() {
+                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
+                        if (match) {
+                            return {
+                                url: match[0],
+                                referer: __PAGE_URL__,
+                                quality: 'HD'
+                            };
+                        }
+                        return null;
+                    })();
+                """
+            },
         ],
     })
 
 
 # ==============================================================================
-# 3. مسار الرئيسية (4 أقسام + الاعتماد على الاسم الأصلي أولاً)
+# 3. مسار الرئيسية
 # ==============================================================================
 
 @app.route('/api/home', methods=['GET'])
@@ -246,7 +340,6 @@ def get_home():
         top_rated_movies = []
         classic_docs = []
 
-        # 1. Trending Movies
         try:
             m_res = requests.get(
                 f'{TMDB_BASE_URL}/trending/movie/week?api_key={TMDB_API_KEY}&language=ar-SA',
@@ -272,7 +365,6 @@ def get_home():
         except Exception as e:
             print(f"⚠️ Trending Movies Error: {e}")
 
-        # 2. Trending TV
         try:
             t_res = requests.get(
                 f'{TMDB_BASE_URL}/trending/tv/week?api_key={TMDB_API_KEY}&language=ar-SA',
@@ -298,7 +390,6 @@ def get_home():
         except Exception as e:
             print(f"⚠️ Trending TV Error: {e}")
 
-        # 3. Top Rated Movies
         try:
             top_res = requests.get(
                 f'{TMDB_BASE_URL}/movie/top_rated?api_key={TMDB_API_KEY}&language=ar-SA',
@@ -324,7 +415,6 @@ def get_home():
         except Exception as e:
             print(f"⚠️ Top Rated Error: {e}")
 
-        # 4. Classic Documentaries
         try:
             docs_url = (
                 f'{TMDB_BASE_URL}/discover/movie?api_key={TMDB_API_KEY}'
@@ -351,7 +441,6 @@ def get_home():
         except Exception as e:
             print(f"⚠️ Classic Docs Error: {e}")
 
-        # احتياط Akwam المباشر
         if not trending_movies:
             res_m = requests.get(f'{AKWAM_BASE_DOMAIN}/movies', headers=get_akwam_headers(), timeout=3)
             soup_m = BeautifulSoup(res_m.text, 'html.parser')
@@ -362,7 +451,6 @@ def get_home():
             soup_t = BeautifulSoup(res_t.text, 'html.parser')
             trending_tv = parse_akwam_cards(soup_t)[:10]
 
-        # بناء قائمة الأقسام المعروضة
         sections_list = [
             {
                 'key': 'trending_movies',
@@ -803,6 +891,12 @@ def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
         'Origin': 'https://flaxfer.lol'
     }
 
+    # دالة ضمان وسم HLS في الرابط ليتعرف عليه مشغل ExoPlayer تلقائياً
+    def ensure_hls(u):
+        if not u:
+            return u
+        return u if (".m3u8" in str(u).lower() or "hls" in str(u).lower()) else f"{u}#video.m3u8"
+
     try:
         s_num = int(season)
         e_num = int(episode)
@@ -833,29 +927,26 @@ def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
                         for q_label, q_url in qualities.items():
                             if q_url:
                                 formatted_links.append({
-                                    "url": q_url,
+                                    "url": ensure_hls(q_url),
                                     "quality": int(str(q_label).replace('p', '')) if str(q_label).replace('p', '').isdigit() else 720,
                                     "source": f"Raphael {q_label}",
                                     "referer": "https://flaxfer.lol/"
                                 })
-                                        # دالة إضافة وسم HLS ليتعرف عليه المشغل فوراً
-                    def ensure_hls(u):
-                        if not u: return u
-                        return u if (".m3u8" in str(u).lower() or "hls" in str(u).lower()) else f"{u}#video.m3u8"
-
                     elif isinstance(stream_obj, str):
                         stream_url = stream_obj
 
-                    # 1. الرابط الأساسي (مغلف بـ ensure_hls)
-                    if stream_url and not any(l['url'] == ensure_hls(stream_url) for l in formatted_links):
-                        formatted_links.append({
-                            "url": ensure_hls(stream_url),
-                            "quality": 720,
-                            "source": data.get("source") or "Raphael Fast (H.264)",
-                            "referer": "https://flaxfer.lol/"
-                        })
+                    # 1. الرابط الأساسي
+                    if stream_url:
+                        clean_main = ensure_hls(stream_url)
+                        if not any(l['url'] == clean_main for l in formatted_links):
+                            formatted_links.append({
+                                "url": clean_main,
+                                "quality": 720,
+                                "source": data.get("source") or "Raphael Fast (H.264)",
+                                "referer": "https://flaxfer.lol/"
+                            })
 
-                    # 2. السيرفرات البديلة (مغلفة بـ ensure_hls)
+                    # 2. السيرفرات البديلة
                     for s in data.get("sources", []):
                         s_url = s.get("url") if isinstance(s, dict) else s
                         clean_s_url = ensure_hls(s_url)
@@ -863,17 +954,11 @@ def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
                             s_name = s.get("name") or s.get("source") or "Raphael Backup"
                             formatted_links.append({
                                 "url": clean_s_url,
-                                "quality": 1080 if "1080" in s_name else 720,
+                                "quality": 1080 if "1080" in str(s_name) else 720,
                                 "source": s_name,
                                 "referer": "https://flaxfer.lol/"
                             })
 
-
-
-
-
-
-                    
                     if formatted_links:
                         break
         except Exception:
@@ -903,11 +988,6 @@ def get_stream_source():
         'links': links
     }
 
-
-
-
-
-    
     if links:
         set_cached(cache_key, res_data, ttl=7200)
 
