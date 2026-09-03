@@ -838,28 +838,42 @@ def extract_raphael_streams(tmdb_id, media_type="movie", season=1, episode=1):
                                     "source": f"Raphael {q_label}",
                                     "referer": "https://flaxfer.lol/"
                                 })
+                                        # دالة إضافة وسم HLS ليتعرف عليه المشغل فوراً
+                    def ensure_hls(u):
+                        if not u: return u
+                        return u if (".m3u8" in str(u).lower() or "hls" in str(u).lower()) else f"{u}#video.m3u8"
+
                     elif isinstance(stream_obj, str):
                         stream_url = stream_obj
 
-                    if stream_url and not any(l['url'] == stream_url for l in formatted_links):
+                    # 1. الرابط الأساسي (مغلف بـ ensure_hls)
+                    if stream_url and not any(l['url'] == ensure_hls(stream_url) for l in formatted_links):
                         formatted_links.append({
-                            "url": stream_url,
+                            "url": ensure_hls(stream_url),
                             "quality": 720,
                             "source": data.get("source") or "Raphael Fast (H.264)",
                             "referer": "https://flaxfer.lol/"
                         })
 
+                    # 2. السيرفرات البديلة (مغلفة بـ ensure_hls)
                     for s in data.get("sources", []):
                         s_url = s.get("url") if isinstance(s, dict) else s
-                        if s_url and not any(l['url'] == s_url for l in formatted_links):
+                        clean_s_url = ensure_hls(s_url)
+                        if s_url and not any(l['url'] == clean_s_url for l in formatted_links):
                             s_name = s.get("name") or s.get("source") or "Raphael Backup"
                             formatted_links.append({
-                                "url": s_url,
+                                "url": clean_s_url,
                                 "quality": 1080 if "1080" in s_name else 720,
                                 "source": s_name,
                                 "referer": "https://flaxfer.lol/"
                             })
 
+
+
+
+
+
+                    
                     if formatted_links:
                         break
         except Exception:
@@ -889,6 +903,11 @@ def get_stream_source():
         'links': links
     }
 
+
+
+
+
+    
     if links:
         set_cached(cache_key, res_data, ttl=7200)
 
