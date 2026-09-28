@@ -268,7 +268,7 @@ def index():
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '12.2.1-ProviderRefresh',
+        'version': '12.2.2-StabilityRevert',
     })
 
 
@@ -307,35 +307,8 @@ def get_config():
 
     return jsonify({
         'status': 'success',
-        'version': '12.2.1-ProviderRefresh',
+        'version': '12.2.2-StabilityRevert',
         'providers': [
-            {
-                'name': 'vumoo',
-                'domain': 'https://vumoo.to',
-                'search_path': '/search?q={query}',
-                'card_selector': 'div.video-item a, div.poster a, .film-detail a',
-                'movie_selector': 'a[href*="/movie/"]',
-                'series_selector': 'a[href*="/tv/"]',
-                'watch_selector': 'iframe, [data-src], .play-btn',
-                'iframe_selector': 'iframe',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-                'requires_unpack': True,
-                'ajax_required': False,
-                'active_headers': get_vault_session("vumoo", "https://vumoo.to"),
-                'extractor_script': r"""
-                    (function() {
-                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
-                        if (match) {
-                            return {
-                                url: match[0],
-                                referer: __PAGE_URL__,
-                                quality: match[0].indexOf('.m3u8') !== -1 ? 'Auto HLS' : '1080p English'
-                            };
-                        }
-                        return null;
-                    })();
-                """
-            },
             {
                 'name': 'akwam',
                 'domain': AKWAM_BASE_DOMAIN,
@@ -359,94 +332,16 @@ def get_config():
                         }
                         return null;
                     })();
-                """,
-
-                # v12.2 (Phase 2 — Server-Driven Scripts): The three scripts
-                # below ship JS to the Android app so card/season/episode
-                # parsing can be fixed server-side without rebuilding the APK.
-                # QuickJS regex syntax is standard JS — runs in ~5-15ms.
-                'search_card_script': r"""
-                    (function() {
-                        // Strip S/E markers from query so we match the series title alone
-                        var q = (__QUERY__ || __ORIGINAL_TITLE__ || '').toLowerCase()
-                            .replace(/\bS\d+E\d+\b/gi, ' ')
-                            .replace(/(?:الموسم|موسم)\s*\d+/g, ' ')
-                            .replace(/(?:الحلقة|حلقة)\s*\d+/g, ' ')
-                            .replace(/\s+/g, ' ')
-                            .trim();
-                        if (!q) return null;
-                        var tokens = q.split(' ').filter(function(t) {
-                            return t.length >= 2 && !/^(the|and|a|an|of|in|فيلم|مسلسل|مترجم|كامل|اون|لاين|hd|fhd|season|episode|الموسم|الحلقة)$/i.test(t);
-                        });
-                        // Regex to find <a href="..."...>text</a> containing /series/ or /movie/
-                        var re = /<a[^>]*href=["']([^"']*(?:\/series\/|\/movie\/)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
-                        var m, best = null, bestScore = -1;
-                        while ((m = re.exec(__HTML__)) !== null) {
-                            var url = m[1];
-                            var text = m[2].replace(/<[^>]*>/g, '').trim();
-                            var lower = (text + ' ' + url).toLowerCase();
-                            if (tokens.length === 0) {
-                                if (best === null) { best = { url: url, title: text }; }
-                                continue;
-                            }
-                            var matched = 0;
-                            for (var i = 0; i < tokens.length; i++) {
-                                if (lower.indexOf(tokens[i]) !== -1) matched++;
-                            }
-                            var ratio = matched / tokens.length;
-                            if (ratio >= 0.65 || (tokens.length <= 2 && matched === tokens.length)) {
-                                if (ratio > bestScore) {
-                                    bestScore = ratio;
-                                    best = { url: url, title: text };
-                                }
-                            }
-                        }
-                        return best;
-                    })();
-                """,
-
-                'season_list_script': r"""
-                    (function() {
-                        var seasons = [];
-                        var seen = {};
-                        var re = /<a[^>]*href=["']([^"']*\/series\/[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
-                        var m;
-                        while ((m = re.exec(__HTML__)) !== null) {
-                            var url = m[1];
-                            if (seen[url]) continue;
-                            seen[url] = true;
-                            var text = m[2].replace(/<[^>]*>/g, '').trim() || 'موسم';
-                            var numMatch = text.match(/(?:موسم|الموسم|season)\s*(\d{1,2})/i);
-                            var num = numMatch ? parseInt(numMatch[1], 10) : (seasons.length + 1);
-                            seasons.push({ url: url, title: text, number: num });
-                        }
-                        return seasons;
-                    })();
-                """,
-
-                'episode_list_script': r"""
-                    (function() {
-                        var episodes = [];
-                        var seen = {};
-                        var re = /<a[^>]*href=["']([^"']*\/episode\/[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
-                        var m;
-                        while ((m = re.exec(__HTML__)) !== null) {
-                            var url = m[1];
-                            if (seen[url]) continue;
-                            seen[url] = true;
-                            var text = m[2].replace(/<[^>]*>/g, '').trim();
-                            var numMatch = text.match(/(?:حلقة|الحلقة|episode|ep)\s*(\d{1,3})/i)
-                                || text.match(/\b(\d{1,3})\b/);
-                            var num = numMatch ? parseInt(numMatch[1], 10) : null;
-                            episodes.push({
-                                url: url,
-                                title: text || (num ? 'الحلقة ' + num : 'حلقة'),
-                                number: num
-                            });
-                        }
-                        return episodes;
-                    })();
                 """
+                # v12.2.2 (Stability Revert): Removed search_card_script,
+                # season_list_script, episode_list_script. The JS regex
+                # approach was matching WRONG cards (different movie/series
+                # would play). The Kotlin fallback (Patch 1's strict
+                # token-matching with Jsoup) was working perfectly — we
+                # now defer to it 100%. Phase 2 infrastructure (the
+                # optional script fields) stays in the Android app but is
+                # dormant. We can re-enable scripts later with proper
+                # HTML-parsing (not regex) after careful testing.
             },
             {
                 'name': 'larroza',
@@ -933,7 +828,6 @@ def search():
                     'larroza': f"{LARROZA_BASE_DOMAIN}/search.php?keywords={quote(search_target)}",
                     'moviz-time': f"https://moviz-time.cfd/?s={quote(search_target)}",
                     'qfilm': f"https://a.qfilm.tv/search.php?keywords={quote(search_target)}",
-                    'vumoo': f"https://vumoo.to/search?q={quote(search_target)}"
                 }
 
                 items.append({
