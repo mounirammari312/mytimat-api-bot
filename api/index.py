@@ -110,11 +110,7 @@ def extract_year(text):
 
 
 def calculate_match_score(target_title, candidate_title, target_orig_title=None, target_year=None):
-    """
-    حساب درجة التطابق بين العمل المطلوب والكارت المعروض:
-    - يعيد درجة بين 0.0 و 1.0.
-    - استبعاد فوري لأي نتيجة تختلف سنتها عن سنة الإنتاج بهامش يزيد عن سنة واحدة.
-    """
+    """حساب درجة التطابق بين العمل المطلوب والكارت المعروض مع شرط السنة الإلزامي."""
     if not candidate_title:
         return 0.0
 
@@ -213,13 +209,11 @@ def get_vault_session(site_key, target_url):
                 "Referer": f"{target_url.rstrip('/')}/"
             }
 
-            # حفظ الهوية السحابية في Redis لمدة ساعتين
             set_cached(cache_key, vault_data, ttl=2 * 3600)
             return vault_data
     except Exception as e:
         print(f"⚠️ Vault Session Error for {site_key}: {e}")
 
-    # Fallback افتراضي شفاف في حال فشل الجلب
     return {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Referer": f"{target_url.rstrip('/')}/"
@@ -227,7 +221,7 @@ def get_vault_session(site_key, target_url):
 
 
 # ==============================================================================
-# 1. اكتشاف دومين أكوام النشط تلقائياً
+# 1. اكتشاف دومين أكوام ومساعدات التنسيق
 # ==============================================================================
 
 def safe_url(url):
@@ -265,6 +259,10 @@ def format_poster(poster_path):
 
 def format_backdrop(backdrop_path):
     return f'https://image.tmdb.org/t/p/w1280{backdrop_path}' if backdrop_path else ''
+
+
+def format_profile(profile_path):
+    return f'https://image.tmdb.org/t/p/w185{profile_path}' if profile_path else ''
 
 
 def parse_akwam_cards(soup):
@@ -323,6 +321,60 @@ def parse_akwam_cards(soup):
     return items
 
 
+def fetch_tmdb_series_meta(clean_tmdb_id, title=None):
+    """جلب القصة والممثلين بالصور والمسلسلات المشابهة من TMDB."""
+    target_id = clean_tmdb_id
+    if not target_id and title:
+        try:
+            s_url = f'{TMDB_BASE_URL}/search/tv?api_key={TMDB_API_KEY}&query={quote(clean_query_term(title))}&language=ar-SA'
+            s_res = requests.get(s_url, headers=TMDB_HEADERS, timeout=3)
+            if s_res.status_code == 200:
+                results = s_res.json().get('results', [])
+                if results:
+                    target_id = str(results[0].get('id'))
+        except Exception:
+            pass
+
+    if not target_id:
+        return "", [], []
+
+    try:
+        t_url = f'{TMDB_BASE_URL}/tv/{target_id}?api_key={TMDB_API_KEY}&language=ar-SA&append_to_response=credits,similar'
+        res = requests.get(t_url, headers=TMDB_HEADERS, timeout=3.5)
+        if res.status_code != 200:
+            return "", [], []
+
+        data = res.json()
+        overview = data.get('overview', '')
+        cast = [
+            {
+                'name': c.get('name', ''),
+                'character': c.get('character', ''),
+                'profile': format_profile(c.get('profile_path')),
+            }
+            for c in data.get('credits', {}).get('cast', [])[:10]
+        ]
+        similar = [
+            {
+                'id': str(s.get('id', '')),
+                'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(clean_query_term(s.get('original_name') or s.get('name', '')))}",
+                'title': s.get('name') or s.get('original_name', ''),
+                'original_title': s.get('original_name', ''),
+                'poster': format_poster(s.get('poster_path')),
+                'backdrop': format_backdrop(s.get('backdrop_path') or s.get('poster_path')),
+                'rating': round(s.get('vote_average', 0), 1),
+                'tags': ['TMDB', str(s.get('first_air_date', ''))[:4] if s.get('first_air_date') else ''],
+                'type': 'tv',
+            }
+            for s in data.get('similar', {}).get('results', [])[:10]
+            if s.get('poster_path')
+        ]
+        return overview, cast, similar
+    except Exception as e:
+        print(f"⚠️ Fetch TMDB Series Meta Error: {e}")
+        return "", [], []
+
+
 # ==============================================================================
 # 2. مسارات التشخيص والإعدادات
 # ==============================================================================
@@ -337,7 +389,7 @@ def index():
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '11.0.0-Production',
+        'version': '11.5.0-Production',
     })
 
 
@@ -376,7 +428,7 @@ def get_config():
 
     return jsonify({
         'status': 'success',
-        'version': '11.0.0-Production',
+        'version': '11.5.0-Production',
         'providers': [
             {
                 'name': 'vumoo',
@@ -528,7 +580,6 @@ def get_home():
         family_animation = []
         kdrama_series = []
 
-        # 1. الأفلام الأكثر شهرة (Trending Movies)
         try:
             m_res = requests.get(
                 f'{TMDB_BASE_URL}/trending/movie/week?api_key={TMDB_API_KEY}&language=ar-SA',
@@ -554,7 +605,6 @@ def get_home():
         except Exception as e:
             print(f"⚠️ Trending Movies Error: {e}")
 
-        # 2. المسلسلات الأكثر مشاهدة (Trending TV)
         try:
             t_res = requests.get(
                 f'{TMDB_BASE_URL}/trending/tv/week?api_key={TMDB_API_KEY}&language=ar-SA',
@@ -580,7 +630,6 @@ def get_home():
         except Exception as e:
             print(f"⚠️ Trending TV Error: {e}")
 
-        # 3. الأفلام الأعلى تقييماً (Top Rated)
         try:
             top_res = requests.get(
                 f'{TMDB_BASE_URL}/movie/top_rated?api_key={TMDB_API_KEY}&language=ar-SA',
@@ -606,7 +655,6 @@ def get_home():
         except Exception as e:
             print(f"⚠️ Top Rated Error: {e}")
 
-        # 4. قمة الأكشن والإثارة (Action Hits)
         try:
             action_url = f'{TMDB_BASE_URL}/discover/movie?api_key={TMDB_API_KEY}&with_genres=28&sort_by=popularity.desc&language=ar-SA'
             action_res = requests.get(action_url, headers=TMDB_HEADERS, timeout=2.5)
@@ -629,7 +677,6 @@ def get_home():
         except Exception as e:
             print(f"⚠️ Action Movies Error: {e}")
 
-        # 5. سينما العائلة والأنيميشن (Animation & Family)
         try:
             family_url = f'{TMDB_BASE_URL}/discover/movie?api_key={TMDB_API_KEY}&with_genres=16,10751&sort_by=popularity.desc&language=ar-SA'
             family_res = requests.get(family_url, headers=TMDB_HEADERS, timeout=2.5)
@@ -652,7 +699,6 @@ def get_home():
         except Exception as e:
             print(f"⚠️ Family Animation Error: {e}")
 
-        # 6. دراما كورية حصرية (Trending K-Drama)
         try:
             kdrama_url = f'{TMDB_BASE_URL}/discover/tv?api_key={TMDB_API_KEY}&with_original_language=ko&sort_by=popularity.desc&language=ar-SA'
             kdrama_res = requests.get(kdrama_url, headers=TMDB_HEADERS, timeout=2.5)
@@ -675,7 +721,6 @@ def get_home():
         except Exception as e:
             print(f"⚠️ KDrama Error: {e}")
 
-        # Fallback لموقع أكوام في حال تعطل TMDB
         if not trending_movies:
             res_m = requests.get(f'{AKWAM_BASE_DOMAIN}/movies', headers=get_akwam_headers(), timeout=3)
             soup_m = BeautifulSoup(res_m.text, 'html.parser')
@@ -884,7 +929,7 @@ def search():
 
 
 # ==============================================================================
-# 6. مسار تفاصيل المسلسلات والمواسم والحلقات (مع الفحص الذكي)
+# 6. مسار تفاصيل المسلسلات (إثراء كامل بالقصة + ممثلين بصورهم + مشابهة)
 # ==============================================================================
 
 @app.route('/api/series-details', methods=['GET'])
@@ -896,7 +941,7 @@ def get_series_details():
     selected_season = request.args.get('season', '1').strip()
     target_year = request.args.get('year', '').strip()
 
-    cache_key = f'series:{tmdb_id or series_url}:{selected_season}'
+    cache_key = f'series:v2:{tmdb_id or series_url}:{selected_season}'
     cached = get_cached(cache_key)
     if cached is not None:
         return jsonify(cached)
@@ -907,6 +952,13 @@ def get_series_details():
     elif series_url and series_url.isdigit():
         clean_tmdb_id = series_url
 
+    # جلب بيانات المسلسل الغنية (القصة + الممثلين بصورهم + الأعمال المشابهة)
+    series_overview, series_cast, series_similar = fetch_tmdb_series_meta(
+        clean_tmdb_id,
+        title=title or orig_title
+    )
+
+    # 1. إذا كان الرابط مباشراً لمسلسل في أكوام
     if series_url and series_url.startswith('http') and '/series/' in series_url:
         try:
             target_url = safe_url(series_url)
@@ -939,13 +991,20 @@ def get_series_details():
                 if episodes or seasons:
                     res_data = {
                         'status': 'success',
-                        'data': {'seasons': seasons, 'episodes': episodes},
+                        'data': {
+                            'seasons': seasons,
+                            'episodes': episodes,
+                            'overview': series_overview,
+                            'cast': series_cast,
+                            'similar': series_similar,
+                        },
                     }
                     set_cached(cache_key, res_data)
                     return jsonify(res_data)
         except Exception as e:
             print(f'⚠️ Akwam Direct Series Error: {e}')
 
+    # 2. حل رابط المسلسل عبر البحث الذكي وفحص النتائج
     search_term = orig_title or title
     if not search_term and '/search' in series_url and 'q=' in series_url:
         try:
@@ -1033,13 +1092,20 @@ def get_series_details():
                     if episodes or seasons:
                         res_data = {
                             'status': 'success',
-                            'data': {'seasons': seasons, 'episodes': episodes},
+                            'data': {
+                                'seasons': seasons,
+                                'episodes': episodes,
+                                'overview': series_overview,
+                                'cast': series_cast,
+                                'similar': series_similar,
+                            },
                         }
                         set_cached(cache_key, res_data)
                         return jsonify(res_data)
         except Exception as e:
             print(f'⚠️ Akwam Search Resolution Error: {e}')
 
+    # 3. الاعتماد على TMDB لجلب الحلقات وتجهيز استعلامات دقيقة
     if clean_tmdb_id:
         try:
             tmdb_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}?api_key={TMDB_API_KEY}&language=ar-SA'
@@ -1083,6 +1149,9 @@ def get_series_details():
                     'current_season': season_num,
                     'seasons': seasons,
                     'episodes': episodes,
+                    'overview': series_overview or res_tv.get('overview', ''),
+                    'cast': series_cast,
+                    'similar': series_similar,
                 },
             }
             set_cached(cache_key, res_data)
@@ -1092,13 +1161,20 @@ def get_series_details():
 
     return jsonify({
         'status': 'success',
-        'data': {'current_season': 1, 'seasons': [], 'episodes': []},
+        'data': {
+            'current_season': 1,
+            'seasons': [],
+            'episodes': [],
+            'overview': series_overview,
+            'cast': series_cast,
+            'similar': series_similar,
+        },
         'message': 'لم يتم العثور على حلقات لهذا المسلسل',
     })
 
 
 # ==============================================================================
-# 7. مسار تفاصيل الأفلام (مع جلب الأفلام المشابهة similar)
+# 7. مسار تفاصيل الأفلام (مع صور الممثلين الحقيقية profile والأفلام المشابهة)
 # ==============================================================================
 
 @app.route('/api/movie-details', methods=['GET'])
@@ -1106,7 +1182,7 @@ def get_movie_details():
     tmdb_id = request.args.get('id', '').strip()
     title = request.args.get('title', '').strip()
 
-    cache_key = f'movie:{tmdb_id or title}'
+    cache_key = f'movie:v2:{tmdb_id or title}'
     cached = get_cached(cache_key)
     if cached is not None:
         return jsonify(cached)
@@ -1133,7 +1209,6 @@ def get_movie_details():
         })
 
     try:
-        # إضافة similar لجلب الأفلام المشابهة تلقائياً في نفس الطلب
         detail_url = f'{TMDB_BASE_URL}/movie/{clean_id}?api_key={TMDB_API_KEY}&language=ar-SA&append_to_response=credits,videos,similar'
         res = requests.get(detail_url, headers=TMDB_HEADERS, timeout=4)
         if res.status_code != 200:
@@ -1157,6 +1232,7 @@ def get_movie_details():
                     {
                         'name': c.get('name', ''),
                         'character': c.get('character', ''),
+                        'profile': format_profile(c.get('profile_path')),
                     }
                     for c in data.get('credits', {}).get('cast', [])[:10]
                 ],
@@ -1194,7 +1270,7 @@ def get_movie_details():
 
 
 # ==============================================================================
-# 8. كاش صفحات المشاهدة المشترك (مع التحديث وعزل الكاش القديم المسموم v2)
+# 8. كاش صفحات المشاهدة المشترك (v2)
 # ==============================================================================
 
 @app.route('/api/page-cache', methods=['GET', 'POST'])
