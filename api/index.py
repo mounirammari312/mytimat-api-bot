@@ -1,6 +1,8 @@
+
 from urllib.parse import quote, unquote, urlparse
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
+from difflib import SequenceMatcher
 import requests
 import json
 import re
@@ -68,6 +70,90 @@ TMDB_HEADERS = {
 }
 
 LARROZA_BASE_DOMAIN = 'https://larroza.mom'
+
+
+# ==============================================================================
+# 🎯 محرك التدقيق والتطابق الصارم (Strict Matching Engine)
+# ==============================================================================
+
+def clean_query_term(text):
+    """تنظيف استعلام البحث من الرموز الخاصة التي تعطل محركات بحث المواقع."""
+    if not text:
+        return ""
+    cleaned = re.sub(r'[:\-_.,?!()\[\]/\\+*&^%$#@~`"\']', ' ', str(text))
+    return ' '.join(cleaned.split()).strip()
+
+
+def normalize_title(text):
+    """تجريد وتوحيد العناوين للمقارنة النصية الدقيقة مع حذف الكلمات الزائدة."""
+    if not text:
+        return ""
+    text = str(text).lower()
+    noise_words = [
+        'فيلم', 'مسلسل', 'مترجم', 'مدبلج', 'كامل', 'اون لاين', 'اونلاين',
+        'تحميل', 'مشاهدة', 'hd', 'fhd', '4k', 'cam', 'web-dl', 'webdl',
+        'bluray', 'dvdrip', '1080p', '720p', '480p', 'season', 'episode',
+        'الموسم', 'الحلقة', 'موسم', 'حلقة', 'سلسلة'
+    ]
+    for word in noise_words:
+        text = re.sub(r'\b' + re.escape(word) + r'\b', ' ', text)
+    text = re.sub(r'[^\w\s]', ' ', text)
+    return ' '.join(text.split()).strip()
+
+
+def extract_year(text):
+    """استخراج سنة الإنتاج المكونة من 4 أرقام من النص إن وجدت."""
+    if not text:
+        return None
+    match = re.search(r'\b(19\d\d|20\d\d)\b', str(text))
+    return int(match.group(1)) if match else None
+
+
+def calculate_match_score(target_title, candidate_title, target_orig_title=None, target_year=None):
+    """
+    حساب درجة التطابق بين العمل المطلوب والكارت المعروض:
+    - يعيد درجة بين 0.0 و 1.0.
+    - استبعاد فوري لأي نتيجة تختلف سنتها عن سنة الإنتاج بهامش يزيد عن سنة واحدة.
+    """
+    if not candidate_title:
+        return 0.0
+
+    if target_year:
+        try:
+            ty = int(target_year)
+            cy = extract_year(candidate_title)
+            if cy and abs(cy - ty) > 1:
+                return 0.0
+        except Exception:
+            pass
+
+    norm_cand = normalize_title(candidate_title)
+    if not norm_cand:
+        return 0.0
+
+    scores = []
+
+    if target_orig_title:
+        norm_orig = normalize_title(target_orig_title)
+        if norm_orig:
+            if norm_orig == norm_cand:
+                return 1.0
+            if norm_orig in norm_cand or norm_cand in norm_orig:
+                scores.append(0.92)
+            sim_orig = SequenceMatcher(None, norm_orig, norm_cand).ratio()
+            scores.append(sim_orig)
+
+    if target_title:
+        norm_tgt = normalize_title(target_title)
+        if norm_tgt:
+            if norm_tgt == norm_cand:
+                return 1.0
+            if norm_tgt in norm_cand or norm_cand in norm_tgt:
+                scores.append(0.88)
+            sim_tgt = SequenceMatcher(None, norm_tgt, norm_cand).ratio()
+            scores.append(sim_tgt)
+
+    return max(scores) if scores else 0.0
 
 
 # ==============================================================================
@@ -245,13 +331,13 @@ def parse_akwam_cards(soup):
 def index():
     return jsonify({
         'status': 'online',
-        'mode': 'JSON Rules Engine + QuickJS Micro-Scripts + Upstash Redis Cache',
+        'mode': 'JSON Rules Engine + QuickJS Micro-Scripts + Upstash Redis Cache + Strict Matching Engine',
         'tls_impersonate': 'Chrome 124 (Active)' if HAS_CURL_CFFI else 'Standard Requests',
         'active_domains': {
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '10.5.0-Production',
+        'version': '10.6.0-Production',
     })
 
 
@@ -291,9 +377,8 @@ def get_config():
 
     return jsonify({
         'status': 'success',
-        'version': '10.5.0-Production',
+        'version': '10.6.0-Production',
         'providers': [
-
             {
                 'name': 'vumoo',
                 'domain': 'https://vumoo.to',
@@ -321,12 +406,6 @@ def get_config():
                     })();
                 """
             },
-
-
-
-
-
-            
             {
                 'name': 'akwam',
                 'domain': AKWAM_BASE_DOMAIN,
@@ -458,7 +537,7 @@ def get_home():
                 trending_movies = [
                     {
                         'id': str(m.get('id', '')),
-                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(m.get('original_title') or m.get('title', ''))}",
+                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(clean_query_term(m.get('original_title') or m.get('title', '')))}",
                         'title': m.get('title') or m.get('original_title', ''),
                         'original_title': m.get('original_title', ''),
                         'poster': format_poster(m.get('poster_path')),
@@ -483,7 +562,7 @@ def get_home():
                 trending_tv = [
                     {
                         'id': str(t.get('id', '')),
-                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(t.get('original_name') or t.get('name', ''))}",
+                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(clean_query_term(t.get('original_name') or t.get('name', '')))}",
                         'title': t.get('name') or t.get('original_name', ''),
                         'original_title': t.get('original_name', ''),
                         'poster': format_poster(t.get('poster_path')),
@@ -508,7 +587,7 @@ def get_home():
                 top_rated_movies = [
                     {
                         'id': str(m.get('id', '')),
-                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(m.get('original_title') or m.get('title', ''))}",
+                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(clean_query_term(m.get('original_title') or m.get('title', '')))}",
                         'title': m.get('title') or m.get('original_title', ''),
                         'original_title': m.get('original_title', ''),
                         'poster': format_poster(m.get('poster_path')),
@@ -534,7 +613,7 @@ def get_home():
                 classic_docs = [
                     {
                         'id': str(m.get('id', '')),
-                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(m.get('original_title') or m.get('title', ''))}",
+                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(clean_query_term(m.get('original_title') or m.get('title', '')))}",
                         'title': m.get('title') or m.get('original_title', ''),
                         'original_title': m.get('original_title', ''),
                         'poster': format_poster(m.get('poster_path')),
@@ -705,7 +784,10 @@ def search():
                 orig_title = item.get('original_name') or item.get('original_title') or ''
                 poster_path = item.get('poster_path')
 
-                search_target = orig_title if orig_title else title
+                # تنظيف الكلمات المفتاحية للبحث الصارم
+                raw_target = orig_title if orig_title else title
+                search_target = clean_query_term(raw_target)
+
                 sources = {
                     'akwam': f"{AKWAM_BASE_DOMAIN}/search?q={quote(search_target)}",
                     'larroza': f"{LARROZA_BASE_DOMAIN}/search.php?keywords={quote(search_target)}",
@@ -713,7 +795,6 @@ def search():
                     'qfilm': f"https://a.qfilm.tv/search.php?keywords={quote(search_target)}",
                     'vumoo': f"https://vumoo.to/search?q={quote(search_target)}"
                 }
-
 
                 items.append({
                     'id': str(item.get('id', '')),
@@ -738,7 +819,7 @@ def search():
 
 
 # ==============================================================================
-# 6. مسار تفاصيل المسلسلات والمواسم والحلقات
+# 6. مسار تفاصيل المسلسلات والمواسم والحلقات (مع الفحص الذكي)
 # ==============================================================================
 
 @app.route('/api/series-details', methods=['GET'])
@@ -748,6 +829,7 @@ def get_series_details():
     title = request.args.get('title', '').strip()
     orig_title = request.args.get('original_title', '').strip()
     selected_season = request.args.get('season', '1').strip()
+    target_year = request.args.get('year', '').strip()
 
     cache_key = f'series:{tmdb_id or series_url}:{selected_season}'
     cached = get_cached(cache_key)
@@ -760,6 +842,7 @@ def get_series_details():
     elif series_url and series_url.isdigit():
         clean_tmdb_id = series_url
 
+    # 1. إذا كان الرابط مباشراً لمسلسل في أكوام، نتأكد منه
     if series_url and series_url.startswith('http') and '/series/' in series_url:
         try:
             target_url = safe_url(series_url)
@@ -799,6 +882,7 @@ def get_series_details():
         except Exception as e:
             print(f'⚠️ Akwam Direct Series Error: {e}')
 
+    # 2. حل رابط المسلسل عبر البحث الذكي وفحص جميع النتائج (إلغاء select_one العشوائي)
     search_term = orig_title or title
     if not search_term and '/search' in series_url and 'q=' in series_url:
         try:
@@ -807,14 +891,56 @@ def get_series_details():
             pass
 
     if search_term:
+        clean_search = clean_query_term(search_term)
         try:
-            search_req_url = f'{AKWAM_BASE_DOMAIN}/search?q={quote(search_term)}'
+            search_req_url = f'{AKWAM_BASE_DOMAIN}/search?q={quote(clean_search)}'
             res_search = requests.get(search_req_url, headers=get_akwam_headers(), timeout=4)
             if res_search.status_code == 200:
                 soup_search = BeautifulSoup(res_search.text, 'html.parser')
-                card = soup_search.select_one('a[href*="/series/"]')
-                if card and card.get('href'):
-                    real_series_url = card['href']
+
+                candidate_cards = soup_search.select(
+                    'div.widget-body div.col-lg-2, div.widget-body div.col-md-3, div.entry-box, div.col-md-4, a[href*="/series/"]'
+                )
+
+                best_card_url = None
+                best_score = 0.0
+                seen_candidates = set()
+
+                for c in candidate_cards:
+                    link_el = c if c.name == 'a' and '/series/' in c.get('href', '') else c.select_one('a[href*="/series/"]')
+                    if not link_el or not link_el.get('href'):
+                        continue
+
+                    href = link_el['href']
+                    if href in seen_candidates:
+                        continue
+                    seen_candidates.add(href)
+
+                    # استخراج العنوان المكتوب على الكارت
+                    title_el = c.select_one('h3.entry-title, .entry-title, h3, a.entry-title')
+                    img_el = c.select_one('img')
+                    card_title = ""
+                    if title_el and title_el.get_text(strip=True):
+                        card_title = title_el.get_text(strip=True)
+                    elif link_el.get_text(strip=True):
+                        card_title = link_el.get_text(strip=True)
+                    elif img_el and img_el.get('alt'):
+                        card_title = img_el['alt']
+
+                    score = calculate_match_score(
+                        target_title=title,
+                        candidate_title=card_title,
+                        target_orig_title=orig_title,
+                        target_year=target_year
+                    )
+
+                    # اشتراط نسبة تطابق حقيقية
+                    if score > best_score and score >= 0.70:
+                        best_score = score
+                        best_card_url = href
+
+                if best_card_url:
+                    real_series_url = best_card_url
                     if not real_series_url.startswith('http'):
                         real_series_url = f"{AKWAM_BASE_DOMAIN}/{real_series_url.lstrip('/')}"
 
@@ -853,6 +979,7 @@ def get_series_details():
         except Exception as e:
             print(f'⚠️ Akwam Search Resolution Error: {e}')
 
+    # 3. الاعتماد على TMDB لجلب الحلقات وتجهيز استعلامات دقيقة
     if clean_tmdb_id:
         try:
             tmdb_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}?api_key={TMDB_API_KEY}&language=ar-SA'
@@ -929,7 +1056,7 @@ def get_movie_details():
         clean_id = tmdb_id
     elif title:
         try:
-            search_url = f'{TMDB_BASE_URL}/search/movie?api_key={TMDB_API_KEY}&query={quote(title)}&language=ar-SA'
+            search_url = f'{TMDB_BASE_URL}/search/movie?api_key={TMDB_API_KEY}&query={quote(clean_query_term(title))}&language=ar-SA'
             res = requests.get(search_url, headers=TMDB_HEADERS, timeout=4)
             if res.status_code == 200:
                 results = res.json().get('results', [])
@@ -991,7 +1118,7 @@ def get_movie_details():
 
 
 # ==============================================================================
-# 8. كاش صفحات المشاهدة المشترك (Watch Page Cache)
+# 8. كاش صفحات المشاهدة المشترك (مع التحديث وعزل الكاش القديم المسموم v2)
 # ==============================================================================
 
 @app.route('/api/page-cache', methods=['GET', 'POST'])
@@ -1001,7 +1128,8 @@ def handle_page_cache():
         if not cache_key:
             return jsonify({'status': 'error', 'message': 'Missing key'}), 400
 
-        cached_url = get_cached(f"page:{cache_key}")
+        # استخدام بادئة v2 لإسقاط أي روابط مسمومة قديمة مخزنة
+        cached_url = get_cached(f"page:v2:{cache_key}")
         return jsonify({'status': 'success', 'url': cached_url})
 
     elif request.method == 'POST':
@@ -1010,7 +1138,7 @@ def handle_page_cache():
         target_url = data.get('url')
 
         if cache_key and target_url:
-            set_cached(f"page:{cache_key}", target_url, ttl=48 * 3600)
+            set_cached(f"page:v2:{cache_key}", target_url, ttl=48 * 3600)
             return jsonify({'status': 'success', 'message': 'Cached successfully'})
 
         return jsonify({'status': 'error', 'message': 'Invalid payload'}), 400
@@ -1018,4 +1146,3 @@ def handle_page_cache():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
-
