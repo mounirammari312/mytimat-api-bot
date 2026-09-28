@@ -321,25 +321,35 @@ def parse_akwam_cards(soup):
     return items
 
 
-def fetch_tmdb_series_meta(clean_tmdb_id, title=None):
-    """جلب القصة والممثلين بالصور والمسلسلات المشابهة من TMDB."""
-    target_id = clean_tmdb_id
-    if not target_id and title:
+def resolve_tmdb_tv_id(candidate_id, title=None, orig_title=None):
+    """استخراج أو البحث عن معرّف المسلسل الرقمي في TMDB بدقة عالية."""
+    if candidate_id and str(candidate_id).strip().isdigit():
+        return str(candidate_id).strip()
+
+    search_queries = [orig_title, title]
+    for q in search_queries:
+        if not q:
+            continue
         try:
-            s_url = f'{TMDB_BASE_URL}/search/tv?api_key={TMDB_API_KEY}&query={quote(clean_query_term(title))}&language=ar-SA'
-            s_res = requests.get(s_url, headers=TMDB_HEADERS, timeout=3)
+            cleaned = clean_query_term(q)
+            s_url = f'{TMDB_BASE_URL}/search/tv?api_key={TMDB_API_KEY}&query={quote(cleaned)}&language=ar-SA'
+            s_res = requests.get(s_url, headers=TMDB_HEADERS, timeout=3.5)
             if s_res.status_code == 200:
                 results = s_res.json().get('results', [])
                 if results:
-                    target_id = str(results[0].get('id'))
-        except Exception:
-            pass
+                    return str(results[0].get('id'))
+        except Exception as e:
+            print(f"⚠️ Search TMDB TV ID Error for '{q}': {e}")
+    return None
 
-    if not target_id:
+
+def fetch_tmdb_series_meta(clean_tmdb_id):
+    """جلب القصة والممثلين بالصور والمسلسلات المشابهة من TMDB."""
+    if not clean_tmdb_id:
         return "", [], []
 
     try:
-        t_url = f'{TMDB_BASE_URL}/tv/{target_id}?api_key={TMDB_API_KEY}&language=ar-SA&append_to_response=credits,similar'
+        t_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}?api_key={TMDB_API_KEY}&language=ar-SA&append_to_response=credits,similar'
         res = requests.get(t_url, headers=TMDB_HEADERS, timeout=3.5)
         if res.status_code != 200:
             return "", [], []
@@ -389,7 +399,7 @@ def index():
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '11.5.0-Production',
+        'version': '12.0.0-Production',
     })
 
 
@@ -428,7 +438,7 @@ def get_config():
 
     return jsonify({
         'status': 'success',
-        'version': '11.5.0-Production',
+        'version': '12.0.0-Production',
         'providers': [
             {
                 'name': 'vumoo',
@@ -562,7 +572,7 @@ def get_config():
 
 
 # ==============================================================================
-# 3. مسار الرئيسية (الأقسام الحديثة والغنية مع تجديد الكاش v7)
+# 3. مسار الرئيسية (الأقسام الستة الغنية)
 # ==============================================================================
 
 @app.route('/api/home', methods=['GET'])
@@ -929,7 +939,7 @@ def search():
 
 
 # ==============================================================================
-# 6. مسار تفاصيل المسلسلات (إثراء كامل بالقصة + ممثلين بصورهم + مشابهة)
+# 6. مسار تفاصيل المسلسلات (TMDB-First Architecture)
 # ==============================================================================
 
 @app.route('/api/series-details', methods=['GET'])
@@ -941,24 +951,105 @@ def get_series_details():
     selected_season = request.args.get('season', '1').strip()
     target_year = request.args.get('year', '').strip()
 
-    cache_key = f'series:v2:{tmdb_id or series_url}:{selected_season}'
+    # استخراج TMDB ID أولاً لضمان الاعتماد على قاعدة البيانات العالمية
+    clean_tmdb_id = resolve_tmdb_tv_id(tmdb_id or series_url, title=title, orig_title=orig_title)
+
+    cache_key = f'series:v3:{clean_tmdb_id or series_url}:{selected_season}'
     cached = get_cached(cache_key)
     if cached is not None:
         return jsonify(cached)
 
-    clean_tmdb_id = None
-    if tmdb_id and tmdb_id.isdigit():
-        clean_tmdb_id = tmdb_id
-    elif series_url and series_url.isdigit():
-        clean_tmdb_id = series_url
+    # ══════════════════════════════════════════════════════════════════════════
+    # المسار الأساسي 1: بناء بنية المسلسل كاملة عبر TMDB (يمنع أي Mismatch)
+    # ══════════════════════════════════════════════════════════════════════════
+    if clean_tmdb_id:
+        try:
+            tmdb_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}?api_key={TMDB_API_KEY}&language=ar-SA&append_to_response=credits,similar'
+            res_tv_obj = requests.get(tmdb_url, headers=TMDB_HEADERS, timeout=4)
+            if res_tv_obj.status_code == 200:
+                res_tv = res_tv_obj.json()
 
-    # جلب بيانات المسلسل الغنية (القصة + الممثلين بصورهم + الأعمال المشابهة)
-    series_overview, series_cast, series_similar = fetch_tmdb_series_meta(
-        clean_tmdb_id,
-        title=title or orig_title
-    )
+                tv_title = res_tv.get('name') or title or 'مسلسل'
+                tv_orig_title = res_tv.get('original_name') or orig_title or tv_title
+                overview = res_tv.get('overview', '')
 
-    # 1. إذا كان الرابط مباشراً لمسلسل في أكوام
+                # طاقم التمثيل بالصور الحقيقية
+                cast = [
+                    {
+                        'name': c.get('name', ''),
+                        'character': c.get('character', ''),
+                        'profile': format_profile(c.get('profile_path')),
+                    }
+                    for c in res_tv.get('credits', {}).get('cast', [])[:10]
+                ]
+
+                # المسلسلات المشابهة
+                similar = [
+                    {
+                        'id': str(s.get('id', '')),
+                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(clean_query_term(s.get('original_name') or s.get('name', '')))}",
+                        'title': s.get('name') or s.get('original_name', ''),
+                        'original_title': s.get('original_name', ''),
+                        'poster': format_poster(s.get('poster_path')),
+                        'backdrop': format_backdrop(s.get('backdrop_path') or s.get('poster_path')),
+                        'rating': round(s.get('vote_average', 0), 1),
+                        'tags': ['TMDB', str(s.get('first_air_date', ''))[:4] if s.get('first_air_date') else ''],
+                        'type': 'tv',
+                    }
+                    for s in res_tv.get('similar', {}).get('results', [])[:10]
+                    if s.get('poster_path')
+                ]
+
+                # قائمة المواسم
+                seasons = []
+                for s in res_tv.get('seasons', []):
+                    s_num = s.get('season_number', 0)
+                    if s_num > 0:
+                        seasons.append({
+                            'season_number': s_num,
+                            'title': s.get('name') or f'الموسم {s_num}',
+                            'episode_count': s.get('episode_count', 0),
+                        })
+
+                season_num = int(selected_season) if selected_season.isdigit() else 1
+                ep_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}/season/{season_num}?api_key={TMDB_API_KEY}&language=ar-SA'
+                res_ep = requests.get(ep_url, headers=TMDB_HEADERS, timeout=4).json()
+
+                # صياغة استعلامات بحث ذكية وموحدة للحلقات
+                episodes = []
+                clean_base_title = clean_query_term(tv_title)
+                clean_base_orig = clean_query_term(tv_orig_title)
+
+                for ep in res_ep.get('episodes', []):
+                    ep_num = ep.get('episode_number')
+                    episodes.append({
+                        'season_number': season_num,
+                        'episode_number': ep_num,
+                        'title': f"الحلقة {ep_num} - {ep.get('name', '')}",
+                        'search_title': f"{clean_base_title} الموسم {season_num} الحلقة {ep_num}",
+                        'search_orig_title': f"{clean_base_orig} S{season_num:02d}E{ep_num:02d}",
+                        'search_query': f"{clean_base_orig} S{season_num:02d}E{ep_num:02d}",
+                    })
+
+                res_data = {
+                    'status': 'success',
+                    'data': {
+                        'current_season': season_num,
+                        'seasons': seasons,
+                        'episodes': episodes,
+                        'overview': overview,
+                        'cast': cast,
+                        'similar': similar,
+                    },
+                }
+                set_cached(cache_key, res_data)
+                return jsonify(res_data)
+        except Exception as tmdb_err:
+            print(f'⚠️ TMDB Primary Architecture Error: {tmdb_err}')
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # المسار الاحتياطي 2: Fallback مباشر لأكوام فقط إذا لم يكن العمل مسجلاً في TMDB
+    # ══════════════════════════════════════════════════════════════════════════
     if series_url and series_url.startswith('http') and '/series/' in series_url:
         try:
             target_url = safe_url(series_url)
@@ -992,172 +1083,18 @@ def get_series_details():
                     res_data = {
                         'status': 'success',
                         'data': {
+                            'current_season': 1,
                             'seasons': seasons,
                             'episodes': episodes,
-                            'overview': series_overview,
-                            'cast': series_cast,
-                            'similar': series_similar,
+                            'overview': '',
+                            'cast': [],
+                            'similar': [],
                         },
                     }
                     set_cached(cache_key, res_data)
                     return jsonify(res_data)
         except Exception as e:
-            print(f'⚠️ Akwam Direct Series Error: {e}')
-
-    # 2. حل رابط المسلسل عبر البحث الذكي وفحص النتائج
-    search_term = orig_title or title
-    if not search_term and '/search' in series_url and 'q=' in series_url:
-        try:
-            search_term = unquote(series_url.split('q=')[1].split('&')[0])
-        except Exception:
-            pass
-
-    if search_term:
-        clean_search = clean_query_term(search_term)
-        try:
-            search_req_url = f'{AKWAM_BASE_DOMAIN}/search?q={quote(clean_search)}'
-            res_search = requests.get(search_req_url, headers=get_akwam_headers(), timeout=4)
-            if res_search.status_code == 200:
-                soup_search = BeautifulSoup(res_search.text, 'html.parser')
-
-                candidate_cards = soup_search.select(
-                    'div.widget-body div.col-lg-2, div.widget-body div.col-md-3, div.entry-box, div.col-md-4, a[href*="/series/"]'
-                )
-
-                best_card_url = None
-                best_score = 0.0
-                seen_candidates = set()
-
-                for c in candidate_cards:
-                    link_el = c if c.name == 'a' and '/series/' in c.get('href', '') else c.select_one('a[href*="/series/"]')
-                    if not link_el or not link_el.get('href'):
-                        continue
-
-                    href = link_el['href']
-                    if href in seen_candidates:
-                        continue
-                    seen_candidates.add(href)
-
-                    title_el = c.select_one('h3.entry-title, .entry-title, h3, a.entry-title')
-                    img_el = c.select_one('img')
-                    card_title = ""
-                    if title_el and title_el.get_text(strip=True):
-                        card_title = title_el.get_text(strip=True)
-                    elif link_el.get_text(strip=True):
-                        card_title = link_el.get_text(strip=True)
-                    elif img_el and img_el.get('alt'):
-                        card_title = img_el['alt']
-
-                    score = calculate_match_score(
-                        target_title=title,
-                        candidate_title=card_title,
-                        target_orig_title=orig_title,
-                        target_year=target_year
-                    )
-
-                    if score > best_score and score >= 0.70:
-                        best_score = score
-                        best_card_url = href
-
-                if best_card_url:
-                    real_series_url = best_card_url
-                    if not real_series_url.startswith('http'):
-                        real_series_url = f"{AKWAM_BASE_DOMAIN}/{real_series_url.lstrip('/')}"
-
-                    res_real = requests.get(safe_url(real_series_url), headers=get_akwam_headers(real_series_url), timeout=4)
-                    soup_real = BeautifulSoup(res_real.text, 'html.parser')
-
-                    season_links = soup_real.select('a[href*="/series/"]')
-                    seasons = []
-                    seen_seasons = set()
-                    for s in season_links:
-                        s_href = s['href']
-                        if not s_href.startswith('http'):
-                            s_href = f"{AKWAM_BASE_DOMAIN}/{s_href.lstrip('/')}"
-                        if s_href not in seen_seasons and s_href != real_series_url:
-                            seen_seasons.add(s_href)
-                            seasons.append({'title': s.get_text(strip=True) or 'موسم', 'url': s_href})
-
-                    episode_cards = soup_real.select('a[href*="/episode/"]')
-                    episodes = []
-                    seen_episodes = set()
-                    for ep in episode_cards:
-                        ep_href = ep['href']
-                        if not ep_href.startswith('http'):
-                            ep_href = f"{AKWAM_BASE_DOMAIN}/{ep_href.lstrip('/')}"
-                        if ep_href not in seen_episodes:
-                            seen_episodes.add(ep_href)
-                            episodes.append({'title': ep.get_text(strip=True), 'url': ep_href})
-
-                    if episodes or seasons:
-                        res_data = {
-                            'status': 'success',
-                            'data': {
-                                'seasons': seasons,
-                                'episodes': episodes,
-                                'overview': series_overview,
-                                'cast': series_cast,
-                                'similar': series_similar,
-                            },
-                        }
-                        set_cached(cache_key, res_data)
-                        return jsonify(res_data)
-        except Exception as e:
-            print(f'⚠️ Akwam Search Resolution Error: {e}')
-
-    # 3. الاعتماد على TMDB لجلب الحلقات وتجهيز استعلامات دقيقة
-    if clean_tmdb_id:
-        try:
-            tmdb_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}?api_key={TMDB_API_KEY}&language=ar-SA'
-            res_tv = requests.get(tmdb_url, headers=TMDB_HEADERS, timeout=4).json()
-
-            seasons = []
-            for s in res_tv.get('seasons', []):
-                s_num = s.get('season_number', 0)
-                if s_num > 0:
-                    seasons.append({
-                        'season_number': s_num,
-                        'title': s.get('name') or f'الموسم {s_num}',
-                        'episode_count': s.get('episode_count', 0),
-                    })
-
-            season_num = int(selected_season) if selected_season.isdigit() else 1
-            ep_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}/season/{season_num}?api_key={TMDB_API_KEY}&language=ar-SA'
-            res_ep = requests.get(ep_url, headers=TMDB_HEADERS, timeout=4).json()
-
-            episodes = []
-            for ep in res_ep.get('episodes', []):
-                ep_num = ep.get('episode_number')
-                episodes.append({
-                    'episode_number': ep_num,
-                    'title': f"الحلقة {ep_num} - {ep.get('name', '')}",
-                    'search_title': (
-                        f'{title} الموسم {season_num} الحلقة {ep_num}'
-                        if title
-                        else f'الموسم {season_num} الحلقة {ep_num}'
-                    ),
-                    'search_orig_title': (
-                        f'{orig_title} S{season_num:02d}E{ep_num:02d}'
-                        if orig_title
-                        else f'S{season_num:02d}E{ep_num:02d}'
-                    ),
-                })
-
-            res_data = {
-                'status': 'success',
-                'data': {
-                    'current_season': season_num,
-                    'seasons': seasons,
-                    'episodes': episodes,
-                    'overview': series_overview or res_tv.get('overview', ''),
-                    'cast': series_cast,
-                    'similar': series_similar,
-                },
-            }
-            set_cached(cache_key, res_data)
-            return jsonify(res_data)
-        except Exception as tmdb_err:
-            print(f'⚠️ TMDB Series Season Switch Error: {tmdb_err}')
+            print(f'⚠️ Akwam Fallback Series Error: {e}')
 
     return jsonify({
         'status': 'success',
@@ -1165,9 +1102,9 @@ def get_series_details():
             'current_season': 1,
             'seasons': [],
             'episodes': [],
-            'overview': series_overview,
-            'cast': series_cast,
-            'similar': series_similar,
+            'overview': '',
+            'cast': [],
+            'similar': [],
         },
         'message': 'لم يتم العثور على حلقات لهذا المسلسل',
     })
