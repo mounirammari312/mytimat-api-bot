@@ -1,8 +1,8 @@
 
+
 from urllib.parse import quote, unquote, urlparse
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
-from difflib import SequenceMatcher
 import requests
 import json
 import re
@@ -84,74 +84,6 @@ def clean_query_term(text):
     return ' '.join(cleaned.split()).strip()
 
 
-def normalize_title(text):
-    """تجريد وتوحيد العناوين للمقارنة النصية الدقيقة مع حذف الكلمات الزائدة."""
-    if not text:
-        return ""
-    text = str(text).lower()
-    noise_words = [
-        'فيلم', 'مسلسل', 'مترجم', 'مدبلج', 'كامل', 'اون لاين', 'اونلاين',
-        'تحميل', 'مشاهدة', 'hd', 'fhd', '4k', 'cam', 'web-dl', 'webdl',
-        'bluray', 'dvdrip', '1080p', '720p', '480p', 'season', 'episode',
-        'الموسم', 'الحلقة', 'موسم', 'حلقة', 'سلسلة'
-    ]
-    for word in noise_words:
-        text = re.sub(r'\b' + re.escape(word) + r'\b', ' ', text)
-    text = re.sub(r'[^\w\s]', ' ', text)
-    return ' '.join(text.split()).strip()
-
-
-def extract_year(text):
-    """استخراج سنة الإنتاج المكونة من 4 أرقام من النص إن وجدت."""
-    if not text:
-        return None
-    match = re.search(r'\b(19\d\d|20\d\d)\b', str(text))
-    return int(match.group(1)) if match else None
-
-
-def calculate_match_score(target_title, candidate_title, target_orig_title=None, target_year=None):
-    """حساب درجة التطابق بين العمل المطلوب والكارت المعروض مع شرط السنة الإلزامي."""
-    if not candidate_title:
-        return 0.0
-
-    if target_year:
-        try:
-            ty = int(target_year)
-            cy = extract_year(candidate_title)
-            if cy and abs(cy - ty) > 1:
-                return 0.0
-        except Exception:
-            pass
-
-    norm_cand = normalize_title(candidate_title)
-    if not norm_cand:
-        return 0.0
-
-    scores = []
-
-    if target_orig_title:
-        norm_orig = normalize_title(target_orig_title)
-        if norm_orig:
-            if norm_orig == norm_cand:
-                return 1.0
-            if norm_orig in norm_cand or norm_cand in norm_orig:
-                scores.append(0.92)
-            sim_orig = SequenceMatcher(None, norm_orig, norm_cand).ratio()
-            scores.append(sim_orig)
-
-    if target_title:
-        norm_tgt = normalize_title(target_title)
-        if norm_tgt:
-            if norm_tgt == norm_cand:
-                return 1.0
-            if norm_tgt in norm_cand or norm_cand in norm_tgt:
-                scores.append(0.88)
-            sim_tgt = SequenceMatcher(None, norm_tgt, norm_cand).ratio()
-            scores.append(sim_tgt)
-
-    return max(scores) if scores else 0.0
-
-
 # ==============================================================================
 # 🥷 التقنية 2: محرك انتحال بصمة المتصفح (TLS / JA3 Spoofing)
 # ==============================================================================
@@ -224,10 +156,6 @@ def get_vault_session(site_key, target_url):
 # 1. اكتشاف دومين أكوام ومساعدات التنسيق
 # ==============================================================================
 
-def safe_url(url):
-    return quote(url, safe=':/?&=#%') if url else url
-
-
 def get_active_akwam_domain():
     try:
         res = requests.get(
@@ -245,14 +173,6 @@ def get_active_akwam_domain():
 AKWAM_BASE_DOMAIN = get_active_akwam_domain()
 
 
-def get_akwam_headers(referer_url=None):
-    ref = safe_url(referer_url) if referer_url else f'{AKWAM_BASE_DOMAIN}/'
-    return {
-        'User-Agent': TMDB_HEADERS['User-Agent'],
-        'Referer': ref,
-    }
-
-
 def format_poster(poster_path):
     return f'https://image.tmdb.org/t/p/w780{poster_path}' if poster_path else ''
 
@@ -263,62 +183,6 @@ def format_backdrop(backdrop_path):
 
 def format_profile(profile_path):
     return f'https://image.tmdb.org/t/p/w185{profile_path}' if profile_path else ''
-
-
-def parse_akwam_cards(soup):
-    card_containers = soup.select(
-        'div.widget-body div.col-lg-2, div.widget-body div.col-md-3, div.entry-box'
-    )
-    items = []
-    seen_urls = set()
-
-    for card in card_containers:
-        link_el = card.select_one('a[href*="/movie/"], a[href*="/series/"]')
-        if not link_el:
-            continue
-
-        href = link_el['href']
-        if not href.startswith('http'):
-            href = f"{AKWAM_BASE_DOMAIN}/{href.lstrip('/')}"
-
-        if href in seen_urls:
-            continue
-        seen_urls.add(href)
-
-        title_el = card.select_one('h3.entry-title, .entry-title, h3, a.entry-title')
-        img_el = card.select_one('img')
-
-        title = 'غير متوفر'
-        if title_el and title_el.get_text(strip=True):
-            title = title_el.get_text(strip=True)
-        elif img_el and img_el.get('alt'):
-            title = img_el['alt']
-
-        poster_url = ''
-        if img_el:
-            poster_url = (
-                img_el.get('data-src') or img_el.get('data-lazy') or img_el.get('src')
-            )
-            if poster_url and 'placeholder.png' in poster_url:
-                poster_url = img_el.get('data-src') or poster_url
-
-        badge_els = card.select('span.badge, div.badge, span.quality')
-        badges = [b.get_text(strip=True) for b in badge_els if b.get_text(strip=True)]
-        media_type = 'series' if '/series/' in href else 'movie'
-
-        items.append({
-            'id': href,
-            'title': title,
-            'original_title': title,
-            'url': href,
-            'poster': poster_url,
-            'backdrop': poster_url,
-            'tags': badges if badges else ['HD'],
-            'rating': 0.0,
-            'type': media_type,
-        })
-
-    return items
 
 
 def resolve_tmdb_tv_id(candidate_id, title=None, orig_title=None):
@@ -393,13 +257,13 @@ def fetch_tmdb_series_meta(clean_tmdb_id):
 def index():
     return jsonify({
         'status': 'online',
-        'mode': 'JSON Rules Engine + QuickJS Micro-Scripts + Upstash Redis Cache + Strict Matching Engine',
+        'mode': 'Tiered Architecture (Phase 1) — TMDB-only metadata + Android-side scraping',
         'tls_impersonate': 'Chrome 124 (Active)' if HAS_CURL_CFFI else 'Standard Requests',
         'active_domains': {
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '12.0.0-Production',
+        'version': '12.1.0-Tiered',
     })
 
 
@@ -438,7 +302,7 @@ def get_config():
 
     return jsonify({
         'status': 'success',
-        'version': '12.0.0-Production',
+        'version': '12.1.0-Tiered',
         'providers': [
             {
                 'name': 'vumoo',
@@ -731,15 +595,10 @@ def get_home():
         except Exception as e:
             print(f"⚠️ KDrama Error: {e}")
 
-        if not trending_movies:
-            res_m = requests.get(f'{AKWAM_BASE_DOMAIN}/movies', headers=get_akwam_headers(), timeout=3)
-            soup_m = BeautifulSoup(res_m.text, 'html.parser')
-            trending_movies = parse_akwam_cards(soup_m)[:10]
-
-        if not trending_tv:
-            res_t = requests.get(f'{AKWAM_BASE_DOMAIN}/series', headers=get_akwam_headers(), timeout=3)
-            soup_t = BeautifulSoup(res_t.text, 'html.parser')
-            trending_tv = parse_akwam_cards(soup_t)[:10]
+        # v12.1 (Phase 1 — Tiered Architecture): Akwam fallback removed.
+        # If TMDB returns empty trending lists (timeout/rate-limit),
+        # the server simply returns empty sections — the Android app
+        # handles empty data gracefully (no Akwam scraping on server).
 
         sections_list = [
             {
@@ -812,40 +671,97 @@ def get_home():
 
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
-    cat_type = request.args.get('type', 'movies').lower()
-    page = request.args.get('page', '1')
+    """v12.1 (Phase 1 — Tiered Architecture): Catalog now comes from TMDB
+    Discover instead of scraping Akwam. The Android app code is unchanged
+    because the response shape is identical.
 
-    cache_key = f'catalog:{cat_type}:{page}'
+    Filter mapping (legacy Akwam sections → TMDB language filter):
+      section=29 (Arabic)    → with_original_language=ar
+      section=30 (Foreign)   → no filter (any non-Arabic falls through)
+      section=31 (Indian)   → with_original_language=hi
+      section=32 (Turkish)   → with_original_language=tr
+      section=0  (All)       → no filter
+
+    Cache TTL extended to 24h (was 6h) because catalog data is stable.
+    """
+    cat_type = request.args.get('type', 'movies').lower()  # movies | series
+    page = request.args.get('page', '1')
+    section = request.args.get('section', '')
+    category = request.args.get('category', '')  # legacy: Akwam genre ID
+    year = request.args.get('year', '')
+    quality = request.args.get('quality', '')  # ignored — TMDB has no quality filter
+
+    cache_key = f'catalog:{cat_type}:{page}:{section}:{category}:{year}'
     cached = get_cached(cache_key)
     if cached is not None:
         return jsonify(cached)
 
-    section = request.args.get('section', '')
-    category = request.args.get('category', '')
-    year = request.args.get('year', '')
-    quality = request.args.get('quality', '')
+    tmdb_type = 'movie' if cat_type == 'movies' else 'tv'
 
-    query_params = [f'page={page}']
-    if section:
-        query_params.append(f'section={section}')
-    if category:
-        query_params.append(f'category={category}')
-    if year:
-        query_params.append(f'year={year}')
-    if quality:
-        query_params.append(f'quality={quality}')
+    # Build TMDB Discover params
+    discover_params = {
+        'api_key': TMDB_API_KEY,
+        'language': 'ar-SA',
+        'page': page,
+        'sort_by': 'popularity.desc',
+        'include_adult': 'false',
+    }
 
-    query_string = '&'.join(query_params)
-    catalog_url = safe_url(f'{AKWAM_BASE_DOMAIN}/{cat_type}?{query_string}')
+    # Section → with_original_language
+    section_lang_map = {
+        '29': 'ar',   # عربي
+        '31': 'hi',   # هندي
+        '32': 'tr',   # تركي
+        # '30' (أجنبي) و '0' (الكل) → بدون فلتر لغة
+    }
+    if section in section_lang_map:
+        discover_params['with_original_language'] = section_lang_map[section]
+
+    # Category → with_genres (TMDB genre IDs)
+    if category and category.isdigit():
+        discover_params['with_genres'] = category
+
+    # Year filter
+    if year and year.isdigit():
+        if tmdb_type == 'movie':
+            discover_params['primary_release_date.gte'] = f'{year}-01-01'
+            discover_params['primary_release_date.lte'] = f'{year}-12-31'
+        else:
+            discover_params['first_air_date.gte'] = f'{year}-01-01'
+            discover_params['first_air_date.lte'] = f'{year}-12-31'
 
     try:
-        res = requests.get(catalog_url, headers=get_akwam_headers(catalog_url), timeout=4)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        items = parse_akwam_cards(soup)
+        discover_url = f'{TMDB_BASE_URL}/discover/{tmdb_type}'
+        res = requests.get(discover_url, params=discover_params, headers=TMDB_HEADERS, timeout=4)
+        if res.status_code != 200:
+            return jsonify({'status': 'error', 'message': f'TMDB returned {res.status_code}'}), 502
 
-        page_links = soup.select('ul.pagination a, a.page-link')
-        pages = [p.get_text(strip=True) for p in page_links if p.get_text(strip=True).isdigit()]
-        max_page = max(map(int, pages)) if pages else 1
+        data = res.json()
+        results = data.get('results', [])
+        total_pages = data.get('total_pages', 1)
+        current_page = data.get('page', int(page))
+
+        # Build items with the same shape as /api/home and the old Akwam parser
+        items = []
+        for r in results:
+            if not r.get('poster_path'):
+                continue  # skip items without posters
+            title = r.get('title') or r.get('name') or r.get('original_title') or 'غير متوفر'
+            orig_title = r.get('original_title') or r.get('original_name') or ''
+            date_field = r.get('release_date') or r.get('first_air_date') or ''
+            year_tag = date_field[:4] if date_field else ''
+
+            items.append({
+                'id': str(r.get('id', '')),
+                'title': title,
+                'original_title': orig_title,
+                'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(clean_query_term(orig_title or title))}",
+                'poster': format_poster(r.get('poster_path')),
+                'backdrop': format_backdrop(r.get('backdrop_path') or r.get('poster_path')),
+                'rating': round(r.get('vote_average', 0), 1),
+                'tags': ['TMDB', year_tag] if year_tag else ['TMDB'],
+                'type': 'movie' if tmdb_type == 'movie' else 'tv',
+            })
 
         result = {
             'status': 'success',
@@ -857,15 +773,16 @@ def get_catalog():
                     'year': year or 'all',
                     'quality': quality or 'all',
                 },
-                'current_page': int(page),
-                'total_pages': max_page,
-                'has_next_page': int(page) < max_page,
+                'current_page': current_page,
+                'total_pages': total_pages,
+                'has_next_page': current_page < total_pages,
                 'items_count': len(items),
                 'items': items,
             },
         }
 
-        set_cached(cache_key, result)
+        # v12.1: 24h cache for catalog (longer than 6h default — catalog is stable)
+        set_cached(cache_key, result, ttl=24 * 3600)
         return jsonify(result)
 
     except Exception as e:
@@ -1028,7 +945,6 @@ def get_series_details():
                         'title': f"الحلقة {ep_num} - {ep.get('name', '')}",
                         'search_title': f"{clean_base_title} الموسم {season_num} الحلقة {ep_num}",
                         'search_orig_title': f"{clean_base_orig} S{season_num:02d}E{ep_num:02d}",
-                        'search_query': f"{clean_base_orig} S{season_num:02d}E{ep_num:02d}",
                     })
 
                 res_data = {
@@ -1047,55 +963,10 @@ def get_series_details():
         except Exception as tmdb_err:
             print(f'⚠️ TMDB Primary Architecture Error: {tmdb_err}')
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # المسار الاحتياطي 2: Fallback مباشر لأكوام فقط إذا لم يكن العمل مسجلاً في TMDB
-    # ══════════════════════════════════════════════════════════════════════════
-    if series_url and series_url.startswith('http') and '/series/' in series_url:
-        try:
-            target_url = safe_url(series_url)
-            res = requests.get(target_url, headers=get_akwam_headers(target_url), timeout=4)
-            if res.status_code == 200:
-                soup = BeautifulSoup(res.text, 'html.parser')
-
-                season_links = soup.select('a[href*="/series/"]')
-                seasons = []
-                seen_seasons = set()
-                for s in season_links:
-                    s_href = s['href']
-                    if not s_href.startswith('http'):
-                        s_href = f"{AKWAM_BASE_DOMAIN}/{s_href.lstrip('/')}"
-                    if s_href not in seen_seasons and s_href != series_url:
-                        seen_seasons.add(s_href)
-                        seasons.append({'title': s.get_text(strip=True) or 'موسم', 'url': s_href})
-
-                episode_cards = soup.select('a[href*="/episode/"]')
-                episodes = []
-                seen_episodes = set()
-                for ep in episode_cards:
-                    ep_href = ep['href']
-                    if not ep_href.startswith('http'):
-                        ep_href = f"{AKWAM_BASE_DOMAIN}/{ep_href.lstrip('/')}"
-                    if ep_href not in seen_episodes:
-                        seen_episodes.add(ep_href)
-                        episodes.append({'title': ep.get_text(strip=True), 'url': ep_href})
-
-                if episodes or seasons:
-                    res_data = {
-                        'status': 'success',
-                        'data': {
-                            'current_season': 1,
-                            'seasons': seasons,
-                            'episodes': episodes,
-                            'overview': '',
-                            'cast': [],
-                            'similar': [],
-                        },
-                    }
-                    set_cached(cache_key, res_data)
-                    return jsonify(res_data)
-        except Exception as e:
-            print(f'⚠️ Akwam Fallback Series Error: {e}')
-
+    # v12.1 (Phase 1 — Tiered Architecture): Akwam fallback removed.
+    # When TMDB can't resolve the show, the server returns empty episodes.
+    # The Android app detects this and scrapes Akwam locally on the user's
+    # device via GenericScraper.scrapeSeriesFallback().
     return jsonify({
         'status': 'success',
         'data': {
