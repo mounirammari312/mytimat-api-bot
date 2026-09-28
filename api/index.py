@@ -69,7 +69,12 @@ TMDB_HEADERS = {
     'Accept': 'application/json',
 }
 
-LARROZA_BASE_DOMAIN = 'https://larroza.mom'
+# v12.2.1 (Provider Refresh): Larroza's old domain `larroza.mom` redirects
+# through 9 intermediate domains before landing at `llaroza.click`. Updating
+# the base domain directly saves 9 redirects per request — significantly
+# faster scraping. Structure unchanged: still uses `search.php?keywords=`
+# + `video.php?vid=X` + `embed.php?vid=X` → external iframe → packed JWPlayer.
+LARROZA_BASE_DOMAIN = 'https://llaroza.click'
 
 
 # ==============================================================================
@@ -257,13 +262,13 @@ def fetch_tmdb_series_meta(clean_tmdb_id):
 def index():
     return jsonify({
         'status': 'online',
-        'mode': 'Tiered Architecture (Phase 1) — TMDB-only metadata + Android-side scraping',
+        'mode': 'Tiered Architecture (Phase 2) — TMDB metadata + Android-side scraping + server-driven JS scripts',
         'tls_impersonate': 'Chrome 124 (Active)' if HAS_CURL_CFFI else 'Standard Requests',
         'active_domains': {
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '12.1.0-Tiered',
+        'version': '12.2.1-ProviderRefresh',
     })
 
 
@@ -297,12 +302,12 @@ def test_redis_debug():
 def get_config():
     akwam_headers = get_vault_session("akwam", AKWAM_BASE_DOMAIN)
     larroza_headers = get_vault_session("larroza", LARROZA_BASE_DOMAIN)
-    moviz_headers = get_vault_session("moviz", "https://moviz-time.site")
+    moviz_headers = get_vault_session("moviz", "https://moviz-time.cfd")
     qfilm_headers = get_vault_session("qfilm", "https://a.qfilm.tv")
 
     return jsonify({
         'status': 'success',
-        'version': '12.1.0-Tiered',
+        'version': '12.2.1-ProviderRefresh',
         'providers': [
             {
                 'name': 'vumoo',
@@ -354,6 +359,93 @@ def get_config():
                         }
                         return null;
                     })();
+                """,
+
+                # v12.2 (Phase 2 — Server-Driven Scripts): The three scripts
+                # below ship JS to the Android app so card/season/episode
+                # parsing can be fixed server-side without rebuilding the APK.
+                # QuickJS regex syntax is standard JS — runs in ~5-15ms.
+                'search_card_script': r"""
+                    (function() {
+                        // Strip S/E markers from query so we match the series title alone
+                        var q = (__QUERY__ || __ORIGINAL_TITLE__ || '').toLowerCase()
+                            .replace(/\bS\d+E\d+\b/gi, ' ')
+                            .replace(/(?:الموسم|موسم)\s*\d+/g, ' ')
+                            .replace(/(?:الحلقة|حلقة)\s*\d+/g, ' ')
+                            .replace(/\s+/g, ' ')
+                            .trim();
+                        if (!q) return null;
+                        var tokens = q.split(' ').filter(function(t) {
+                            return t.length >= 2 && !/^(the|and|a|an|of|in|فيلم|مسلسل|مترجم|كامل|اون|لاين|hd|fhd|season|episode|الموسم|الحلقة)$/i.test(t);
+                        });
+                        // Regex to find <a href="..."...>text</a> containing /series/ or /movie/
+                        var re = /<a[^>]*href=["']([^"']*(?:\/series\/|\/movie\/)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
+                        var m, best = null, bestScore = -1;
+                        while ((m = re.exec(__HTML__)) !== null) {
+                            var url = m[1];
+                            var text = m[2].replace(/<[^>]*>/g, '').trim();
+                            var lower = (text + ' ' + url).toLowerCase();
+                            if (tokens.length === 0) {
+                                if (best === null) { best = { url: url, title: text }; }
+                                continue;
+                            }
+                            var matched = 0;
+                            for (var i = 0; i < tokens.length; i++) {
+                                if (lower.indexOf(tokens[i]) !== -1) matched++;
+                            }
+                            var ratio = matched / tokens.length;
+                            if (ratio >= 0.65 || (tokens.length <= 2 && matched === tokens.length)) {
+                                if (ratio > bestScore) {
+                                    bestScore = ratio;
+                                    best = { url: url, title: text };
+                                }
+                            }
+                        }
+                        return best;
+                    })();
+                """,
+
+                'season_list_script': r"""
+                    (function() {
+                        var seasons = [];
+                        var seen = {};
+                        var re = /<a[^>]*href=["']([^"']*\/series\/[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
+                        var m;
+                        while ((m = re.exec(__HTML__)) !== null) {
+                            var url = m[1];
+                            if (seen[url]) continue;
+                            seen[url] = true;
+                            var text = m[2].replace(/<[^>]*>/g, '').trim() || 'موسم';
+                            var numMatch = text.match(/(?:موسم|الموسم|season)\s*(\d{1,2})/i);
+                            var num = numMatch ? parseInt(numMatch[1], 10) : (seasons.length + 1);
+                            seasons.push({ url: url, title: text, number: num });
+                        }
+                        return seasons;
+                    })();
+                """,
+
+                'episode_list_script': r"""
+                    (function() {
+                        var episodes = [];
+                        var seen = {};
+                        var re = /<a[^>]*href=["']([^"']*\/episode\/[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
+                        var m;
+                        while ((m = re.exec(__HTML__)) !== null) {
+                            var url = m[1];
+                            if (seen[url]) continue;
+                            seen[url] = true;
+                            var text = m[2].replace(/<[^>]*>/g, '').trim();
+                            var numMatch = text.match(/(?:حلقة|الحلقة|episode|ep)\s*(\d{1,3})/i)
+                                || text.match(/\b(\d{1,3})\b/);
+                            var num = numMatch ? parseInt(numMatch[1], 10) : null;
+                            episodes.push({
+                                url: url,
+                                title: text || (num ? 'الحلقة ' + num : 'حلقة'),
+                                number: num
+                            });
+                        }
+                        return episodes;
+                    })();
                 """
             },
             {
@@ -381,15 +473,19 @@ def get_config():
             },
             {
                 'name': 'moviz-time',
-                'domain': 'https://moviz-time.site',
+                # v12.2.1: Updated domain from `moviz-time.site` (which redirects
+                # through 6+ domains to `moviz-time.cfd`). New card structure
+                # uses Arabic-slug post URLs like `/مشاهدة-فيلم-...-inception-2010/`
+                # instead of the old `/watch/X/` pattern.
+                'domain': 'https://moviz-time.cfd',
                 'search_path': '/?s={query}',
-                'card_selector': 'a[href*="/watch/"], a[href*="/series/"], article.post a',
-                'watch_selector': 'iframe, [data-link], [data-url], [data-post], .single_tab, .play-btn, .server-item',
-                'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link]',
+                'card_selector': 'article.pinbox .thumb a, h2.title-2 a, h3.title-2 a, article.pinbox a[href]',
+                'watch_selector': 'iframe, [data-link], [data-url], [data-post], .single_tab, .play-btn, .server-item, .server_btn',
+                'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link], option',
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
                 'requires_unpack': True,
                 'ajax_required': True,
-                'series_selector': 'a[href*="/series/"]',
+                'series_selector': 'article.pinbox a[href]',
                 'active_headers': moviz_headers,
                 'extractor_script': r"""
                     (function() {
@@ -407,12 +503,19 @@ def get_config():
             },
             {
                 'name': 'qfilm',
+                # v12.2.1: QFilm structure unchanged (search.php?keywords=,
+                # watch.php?vid=X, embed.php?vid=X with multiple <option value="...">).
+                # The Cloudflare JS challenge was transient — works fine after
+                # a vault session is established. Added `option` to iframe_selector
+                # so the scraper collects ALL 7 server URLs from embed.php's
+                # `<select><option value="...">` (previously only the first iframe
+                # was captured).
                 'domain': 'https://a.qfilm.tv',
                 'search_path': '/search.php?keywords={query}',
                 'card_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"], .pm-search-results a[href*="watch.php"]',
                 'movie_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"]',
                 'series_selector': 'a[href*="series.php"], a[href*="watch.php"]',
-                'iframe_selector': 'iframe',
+                'iframe_selector': 'iframe, option[value]',
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'ajax_required': True,
                 'requires_unpack': False,
@@ -828,7 +931,7 @@ def search():
                 sources = {
                     'akwam': f"{AKWAM_BASE_DOMAIN}/search?q={quote(search_target)}",
                     'larroza': f"{LARROZA_BASE_DOMAIN}/search.php?keywords={quote(search_target)}",
-                    'moviz-time': f"https://moviz-time.site/?s={quote(search_target)}",
+                    'moviz-time': f"https://moviz-time.cfd/?s={quote(search_target)}",
                     'qfilm': f"https://a.qfilm.tv/search.php?keywords={quote(search_target)}",
                     'vumoo': f"https://vumoo.to/search?q={quote(search_target)}"
                 }
