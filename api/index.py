@@ -307,16 +307,15 @@ def get_config():
         'version': '13.1.0-ServerControl',
         'providers': [
 
-
-{
+  {
                 'name': 'free-movies',
                 'domain': 'https://free-movies.world',
                 'search_path': '/?s={query}',
                 'catalog_path': '/movies?page={page}',
                 'series_catalog_path': '/movies?page={page}',
-                'card_selector': 'div.header-inner',
+                'card_selector': 'div.movie-item',
                 'iframe_selector': 'iframe',
-                'link_regex': r"https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*",
+                'link_regex': r'''https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*''',
                 'requires_unpack': False,
                 'requires_webview': True,
                 'active_headers': get_vault_session("free-movies", "https://free-movies.world"),
