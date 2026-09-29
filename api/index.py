@@ -306,8 +306,7 @@ def get_config():
         'status': 'success',
         'version': '13.1.0-ServerControl',
         'providers': [
-
-  {
+       {
                 'name': 'free-movies',
                 'domain': 'https://free-movies.world',
                 'search_path': '/?s={query}',
@@ -315,9 +314,9 @@ def get_config():
                 'series_catalog_path': '/movies?page={page}',
                 'card_selector': 'div.movie-item',
                 'iframe_selector': 'iframe',
+                'watch_selector': 'a[href*="watch"]',
                 'link_regex': r'''https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*''',
                 'requires_unpack': False,
-                'requires_webview': True,
                 'active_headers': get_vault_session("free-movies", "https://free-movies.world"),
                 'card_url_selector': 'a[href]',
                 'card_title_selector': 'img[alt]',
@@ -325,7 +324,11 @@ def get_config():
                 'card_poster_attr': 'src',
                 'match_threshold': 0.55,
                 'extractor_script': r'''
-                    (function() { return null; })();
+                    (function() {
+                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:mp4|m3u8)[^\s"'<>]*/i);
+                        if (match) { return { url: match[0], referer: __PAGE_URL__, quality: 'Auto' }; }
+                        return null;
+                    })();
                 '''
             },
 
