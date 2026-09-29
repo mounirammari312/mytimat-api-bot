@@ -69,11 +69,8 @@ TMDB_HEADERS = {
     'Accept': 'application/json',
 }
 
-# v12.2.1 (Provider Refresh): Larroza's old domain `larroza.mom` redirects
-# through 9 intermediate domains before landing at `llaroza.click`. Updating
-# the base domain directly saves 9 redirects per request — significantly
-# faster scraping. Structure unchanged: still uses `search.php?keywords=`
-# + `video.php?vid=X` + `embed.php?vid=X` → external iframe → packed JWPlayer.
+# v12.2.7: Larroza's old domain redirects through 9 hops to llaroza.click.
+# Direct domain avoids the redirect chain.
 LARROZA_BASE_DOMAIN = 'https://llaroza.click'
 
 
@@ -262,13 +259,13 @@ def fetch_tmdb_series_meta(clean_tmdb_id):
 def index():
     return jsonify({
         'status': 'online',
-        'mode': 'Tiered Architecture (Phase 2) — TMDB metadata + Android-side scraping + server-driven JS scripts',
+        'mode': 'Tiered Architecture (Phase 1) — TMDB-only metadata + Android-side scraping',
         'tls_impersonate': 'Chrome 124 (Active)' if HAS_CURL_CFFI else 'Standard Requests',
         'active_domains': {
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '12.2.2-StabilityRevert',
+        'version': '12.3.0-WebViewEngine',
     })
 
 
@@ -307,7 +304,7 @@ def get_config():
 
     return jsonify({
         'status': 'success',
-        'version': '12.2.2-StabilityRevert',
+        'version': '12.3.0-WebViewEngine',
         'providers': [
             {
                 'name': 'akwam',
@@ -333,15 +330,6 @@ def get_config():
                         return null;
                     })();
                 """
-                # v12.2.2 (Stability Revert): Removed search_card_script,
-                # season_list_script, episode_list_script. The JS regex
-                # approach was matching WRONG cards (different movie/series
-                # would play). The Kotlin fallback (Patch 1's strict
-                # token-matching with Jsoup) was working perfectly — we
-                # now defer to it 100%. Phase 2 infrastructure (the
-                # optional script fields) stays in the Android app but is
-                # dormant. We can re-enable scripts later with proper
-                # HTML-parsing (not regex) after careful testing.
             },
             {
                 'name': 'larroza',
@@ -367,19 +355,21 @@ def get_config():
                 """
             },
             {
+                # v12.3: Moviz-Time re-enabled with requires_webview=true.
+                # FirePlayer JS generates the stream URL at runtime via vhash.
+                # We load the iframe page in a hidden WebView, let FirePlayer
+                # + JWPlayer initialize naturally, and intercept the actual
+                # m3u8 URL via shouldInterceptRequest. This is the universal
+                # approach for ANY JS-driven player framework.
                 'name': 'moviz-time',
-                # v12.2.1: Updated domain from `moviz-time.site` (which redirects
-                # through 6+ domains to `moviz-time.cfd`). New card structure
-                # uses Arabic-slug post URLs like `/مشاهدة-فيلم-...-inception-2010/`
-                # instead of the old `/watch/X/` pattern.
                 'domain': 'https://moviz-time.cfd',
                 'search_path': '/?s={query}',
                 'card_selector': 'article.pinbox .thumb a, h2.title-2 a, h3.title-2 a, article.pinbox a[href]',
-                'watch_selector': 'iframe, [data-link], [data-url], [data-post], .single_tab, .play-btn, .server-item, .server_btn',
-                'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link], option',
+                'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link]',
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
-                'requires_unpack': True,
-                'ajax_required': True,
+                'requires_unpack': False,
+                'ajax_required': False,
+                'requires_webview': True,  # ← v12.3: uses JsStreamExtractor
                 'series_selector': 'article.pinbox a[href]',
                 'active_headers': moviz_headers,
                 'extractor_script': r"""
@@ -398,18 +388,12 @@ def get_config():
             },
             {
                 'name': 'qfilm',
-                # v12.2.1: QFilm structure unchanged (search.php?keywords=,
-                # watch.php?vid=X, embed.php?vid=X with multiple <option value="...">).
-                # The Cloudflare JS challenge was transient — works fine after
-                # a vault session is established. Added `option` to iframe_selector
-                # so the scraper collects ALL 7 server URLs from embed.php's
-                # `<select><option value="...">` (previously only the first iframe
-                # was captured).
                 'domain': 'https://a.qfilm.tv',
                 'search_path': '/search.php?keywords={query}',
                 'card_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"], .pm-search-results a[href*="watch.php"]',
                 'movie_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"]',
                 'series_selector': 'a[href*="series.php"], a[href*="watch.php"]',
+                # v12.2.7: QFilm iframe_selector updated to include option[value]
                 'iframe_selector': 'iframe, option[value]',
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'ajax_required': True,
