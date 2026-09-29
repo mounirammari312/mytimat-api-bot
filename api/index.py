@@ -265,7 +265,7 @@ def index():
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '12.4.0-HybridCatalog',
+        'version': '13.1.0-ServerControl',
     })
 
 
@@ -304,37 +304,8 @@ def get_config():
 
     return jsonify({
         'status': 'success',
-        'version': '12.4.0-HybridCatalog',
+        'version': '13.1.0-ServerControl',
         'providers': [
-
-
-{
-                'name': 'free-movies',
-                'domain': 'https://free-movies.world',
-                'search_path': '/?s={query}',
-                'catalog_path': '/movies?page={page}',
-                'series_catalog_path': '/movies?page={page}',
-                'card_selector': 'div.header-inner',
-                'iframe_selector': 'iframe',
-                'link_regex': r"https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*",
-                'requires_unpack': False,
-                'requires_webview': True,
-                'active_headers': get_vault_session("free-movies", "https://free-movies.world"),
-                'card_url_selector': 'a[href]',
-                'card_title_selector': 'img[alt]',
-                'card_poster_selector': 'img',
-                'card_poster_attr': 'src',
-                'match_threshold': 0.55,
-                'extractor_script': r'''
-                    (function() { return null; })();
-                '''
-            },
-
-
-
-
-
-            
             {
                 'name': 'akwam',
                 'domain': AKWAM_BASE_DOMAIN,
@@ -349,6 +320,12 @@ def get_config():
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
                 'requires_unpack': False,
                 'active_headers': akwam_headers,
+                # v13.1: Server-controllable extraction fields
+                'card_url_selector': 'a[href]',
+                'card_title_selector': 'img[alt]',
+                'card_poster_selector': 'img',
+                'card_poster_attr': 'data-src',
+                'match_threshold': 0.65,
                 'extractor_script': r"""
                     (function() {
                         var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:mp4)[^\s"'<>]*/i);
@@ -374,6 +351,12 @@ def get_config():
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'requires_unpack': True,
                 'active_headers': larroza_headers,
+                # v13.1: Server-controllable extraction fields
+                'card_url_selector': 'a[href]',
+                'card_title_selector': 'img[alt]',
+                'card_poster_selector': 'img',
+                'card_poster_attr': 'data-echo',
+                'match_threshold': 0.55,
                 'extractor_script': r"""
                     (function() {
                         var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
@@ -429,6 +412,12 @@ def get_config():
                 'card_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"], .pm-search-results a[href*="watch.php"]',
                 'movie_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"]',
                 'series_selector': 'a[href*="series.php"], a[href*="watch.php"]',
+                # v13.1: Server-controllable extraction fields
+                'card_url_selector': 'a[href]',
+                'card_title_selector': 'h3.caption, img[alt]',
+                'card_poster_selector': 'img',
+                'card_poster_attr': 'data-echo',
+                'match_threshold': 0.55,
                 # v12.2.7: QFilm iframe_selector updated to include option[value]
                 'iframe_selector': 'iframe, option[value]',
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
