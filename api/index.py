@@ -265,7 +265,7 @@ def index():
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '12.3.0-WebViewEngine',
+        'version': '12.4.0-HybridCatalog',
     })
 
 
@@ -304,12 +304,15 @@ def get_config():
 
     return jsonify({
         'status': 'success',
-        'version': '12.3.0-WebViewEngine',
+        'version': '12.4.0-HybridCatalog',
         'providers': [
             {
                 'name': 'akwam',
                 'domain': AKWAM_BASE_DOMAIN,
                 'search_path': '/search?q={query}',
+                'catalog_path': '/movies?page={page}',
+                'series_catalog_path': '/series?page={page}',
+                'card_selector': 'div.widget-body div.col-lg-2, div.widget-body div.col-md-3, div.entry-box',
                 'movie_selector': 'a[href*=/movie/]',
                 'series_selector': 'a[href*=/series/]',
                 'ep_selector': 'a[href*=/episode/]',
@@ -335,6 +338,8 @@ def get_config():
                 'name': 'larroza',
                 'domain': LARROZA_BASE_DOMAIN,
                 'search_path': '/search.php?keywords={query}',
+                'catalog_path': '/newvideos1.php?page={page}',
+                'series_catalog_path': '/moslslat4.php?page={page}',
                 'card_selector': 'a[href*=video.php]',
                 'iframe_selector': 'iframe',
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
@@ -390,6 +395,8 @@ def get_config():
                 'name': 'qfilm',
                 'domain': 'https://a.qfilm.tv',
                 'search_path': '/search.php?keywords={query}',
+                'catalog_path': '/browse.php?page={page}',
+                'series_catalog_path': '/moslslat.php?page={page}',
                 'card_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"], .pm-search-results a[href*="watch.php"]',
                 'movie_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"]',
                 'series_selector': 'a[href*="series.php"], a[href*="watch.php"]',
