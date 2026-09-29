@@ -306,7 +306,7 @@ def get_config():
         'status': 'success',
         'version': '13.1.0-ServerControl',
         'providers': [
-'providers': [
+
     {
         'name': 'flaxfer',
         'domain': 'https://flaxfer.lol',
