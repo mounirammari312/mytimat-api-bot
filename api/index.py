@@ -307,16 +307,15 @@ def get_config():
         'version': '13.1.0-ServerControl',
         'providers': [
 
-    {
-        'name': 'flaxfer',
-        'domain': 'https://flaxfer.lol',
+   {
+        'name': 'movish',
+        'domain': 'https://movish.to',
         'search_path': '/embed/movie/{tmdb_id}',
         'tmdb_mode': True,
         'link_regex': r'''https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*''',
         'requires_unpack': False,
-        'active_headers': get_vault_session("flaxfer", "https://flaxfer.lol"),
-    },  # الأكثر وعداً — يستخدم artplayer + hls.js
-    
+        'active_headers': get_vault_session("movish", "https://movish.to"),
+    },  # dynamic-iframe
 
 
 
