@@ -306,22 +306,21 @@ def get_config():
         'status': 'success',
         'version': '13.1.0-ServerControl',
         'providers': [
-       {
-                'name': 'free-movies',
-                'domain': 'https://free-movies.world',
+        {
+                'name': 'reelix',
+                'domain': 'https://reelix.ac',
                 'search_path': '/?s={query}',
                 'catalog_path': '/movies?page={page}',
                 'series_catalog_path': '/movies?page={page}',
-                'card_selector': 'div.movie-item',
+                'card_selector': 'div.relative',
                 'iframe_selector': 'iframe',
-                'watch_selector': 'a[href*="watch"]',
                 'link_regex': r'''https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*''',
                 'requires_unpack': False,
-                'active_headers': get_vault_session("free-movies", "https://free-movies.world"),
+                'active_headers': get_vault_session("reelix", "https://reelix.ac"),
                 'card_url_selector': 'a[href]',
                 'card_title_selector': 'img[alt]',
                 'card_poster_selector': 'img',
-                'card_poster_attr': 'src',
+                'card_poster_attr': 'data-src',
                 'match_threshold': 0.55,
                 'extractor_script': r'''
                     (function() {
@@ -331,7 +330,6 @@ def get_config():
                     })();
                 '''
             },
-
 
 
             
