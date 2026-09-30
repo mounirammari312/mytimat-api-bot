@@ -1,5 +1,4 @@
 
-
 from urllib.parse import quote, unquote, urlparse
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
@@ -306,42 +305,140 @@ def get_config():
         'status': 'success',
         'version': '13.1.0-ServerControl',
         'providers': [
-
-   {
-        
-    
-
-    
-
-    'name': 'embedsu',
-    'domain': 'https://embed.su',
-    'search_path': '/embed/movie/{tmdb_id}',
-    'card_selector': 'a',
-    'movie_selector': 'a',
-    'series_selector': 'a',
-    'iframe_selector': 'iframe',
-    'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-    'tmdb_mode': True,
-
-
-
-
-
-
-
-
-
-
-    },  
-
-
-
-            
-
-
-
-
-            
+            {
+                # المزود السحابي العالمي المباشر السريع (FAST-PATH REST API)
+                'name': 'global-rest',
+                'domain': 'https://mytimat-api-bot.vercel.app',
+                'search_path': '/api/stream?tmdb={tmdb_id}&type={type}&season={season}&episode={episode}',
+                'card_selector': 'a',
+                'movie_selector': 'a',
+                'series_selector': 'a',
+                'iframe_selector': 'iframe',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+                'tmdb_mode': True,
+            },
+            {
+                'name': 'akwam',
+                'domain': AKWAM_BASE_DOMAIN,
+                'search_path': '/search?q={query}',
+                'catalog_path': '/movies?page={page}&section={section}',
+                'series_catalog_path': '/series?page={page}&section={section}',
+                'card_selector': 'div.entry-box',
+                'movie_selector': 'a[href*=/movie/]',
+                'series_selector': 'a[href*=/series/]',
+                'ep_selector': 'a[href*=/episode/]',
+                'watch_selector': 'a[href*=/watch/], a.link-btn',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
+                'requires_unpack': False,
+                'active_headers': akwam_headers,
+                'card_url_selector': 'a[href]',
+                'card_title_selector': 'img[alt]',
+                'card_poster_selector': 'img',
+                'card_poster_attr': 'data-src',
+                'match_threshold': 0.65,
+                'extractor_script': r"""
+                    (function() {
+                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:mp4)[^\s"'<>]*/i);
+                        if (match) {
+                            return {
+                                url: match[0],
+                                referer: __PAGE_URL__,
+                                quality: '1080p FHD'
+                            };
+                        }
+                        return null;
+                    })();
+                """
+            },
+            {
+                'name': 'larroza',
+                'domain': LARROZA_BASE_DOMAIN,
+                'search_path': '/search.php?keywords={query}',
+                'catalog_path': '/newvideos1.php?page={page}',
+                'series_catalog_path': '/moslslat4.php?page={page}',
+                'card_selector': 'a[href*=video.php]',
+                'iframe_selector': 'iframe',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+                'requires_unpack': True,
+                'active_headers': larroza_headers,
+                'card_url_selector': 'a[href]',
+                'card_title_selector': 'img[alt]',
+                'card_poster_selector': 'img',
+                'card_poster_attr': 'data-echo',
+                'match_threshold': 0.55,
+                'extractor_script': r"""
+                    (function() {
+                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
+                        if (match) {
+                            return {
+                                url: match[0],
+                                referer: __PAGE_URL__,
+                                quality: match[0].indexOf('.m3u8') !== -1 ? 'HLS' : '1080p'
+                            };
+                        }
+                        return null;
+                    })();
+                """
+            },
+            {
+                'name': 'moviz-time',
+                'domain': 'https://moviz-time.cfd',
+                'search_path': '/?s={query}',
+                'card_selector': 'article.pinbox .thumb a, h2.title-2 a, h3.title-2 a, article.pinbox a[href]',
+                'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link]',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
+                'requires_unpack': False,
+                'ajax_required': False,
+                'requires_webview': True,
+                'series_selector': 'article.pinbox a[href]',
+                'active_headers': moviz_headers,
+                'extractor_script': r"""
+                    (function() {
+                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4|txt)[^\s"'<>]*/i);
+                        if (match) {
+                            return {
+                                url: match[0],
+                                referer: __PAGE_URL__,
+                                quality: 'Auto'
+                            };
+                        }
+                        return null;
+                    })();
+                """
+            },
+            {
+                'name': 'qfilm',
+                'domain': 'https://a.qfilm.tv',
+                'search_path': '/search.php?keywords={query}',
+                'catalog_path': '/browse.php?page={page}',
+                'series_catalog_path': '/moslslat.php?page={page}',
+                'card_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"], .pm-search-results a[href*="watch.php"]',
+                'movie_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"]',
+                'series_selector': 'a[href*="series.php"], a[href*="watch.php"]',
+                'card_url_selector': 'a[href]',
+                'card_title_selector': 'h3.caption, img[alt]',
+                'card_poster_selector': 'img',
+                'card_poster_attr': 'data-echo',
+                'match_threshold': 0.55,
+                'iframe_selector': 'iframe, option[value]',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+                'ajax_required': True,
+                'requires_unpack': False,
+                'active_headers': qfilm_headers,
+                'extractor_script': r"""
+                    (function() {
+                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
+                        if (match) {
+                            return {
+                                url: match[0],
+                                referer: __PAGE_URL__,
+                                quality: 'HD'
+                            };
+                        }
+                        return null;
+                    })();
+                """
+            },
         ],
     })
 
@@ -438,7 +535,7 @@ def get_home():
                     if m.get('poster_path')
                 ]
         except Exception as e:
-            print(f"⚠️ Top Rated Error: {e}")
+            print(f"⚠️️ Top Rated Error: {e}")
 
         try:
             action_url = f'{TMDB_BASE_URL}/discover/movie?api_key={TMDB_API_KEY}&with_genres=28&sort_by=popularity.desc&language=ar-SA'
@@ -505,11 +602,6 @@ def get_home():
                 ]
         except Exception as e:
             print(f"⚠️ KDrama Error: {e}")
-
-        # v12.1 (Phase 1 — Tiered Architecture): Akwam fallback removed.
-        # If TMDB returns empty trending lists (timeout/rate-limit),
-        # the server simply returns empty sections — the Android app
-        # handles empty data gracefully (no Akwam scraping on server).
 
         sections_list = [
             {
@@ -582,25 +674,12 @@ def get_home():
 
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
-    """v12.1 (Phase 1 — Tiered Architecture): Catalog now comes from TMDB
-    Discover instead of scraping Akwam. The Android app code is unchanged
-    because the response shape is identical.
-
-    Filter mapping (legacy Akwam sections → TMDB language filter):
-      section=29 (Arabic)    → with_original_language=ar
-      section=30 (Foreign)   → no filter (any non-Arabic falls through)
-      section=31 (Indian)   → with_original_language=hi
-      section=32 (Turkish)   → with_original_language=tr
-      section=0  (All)       → no filter
-
-    Cache TTL extended to 24h (was 6h) because catalog data is stable.
-    """
-    cat_type = request.args.get('type', 'movies').lower()  # movies | series
+    cat_type = request.args.get('type', 'movies').lower()
     page = request.args.get('page', '1')
     section = request.args.get('section', '')
-    category = request.args.get('category', '')  # legacy: Akwam genre ID
+    category = request.args.get('category', '')
     year = request.args.get('year', '')
-    quality = request.args.get('quality', '')  # ignored — TMDB has no quality filter
+    quality = request.args.get('quality', '')
 
     cache_key = f'catalog:{cat_type}:{page}:{section}:{category}:{year}'
     cached = get_cached(cache_key)
@@ -609,7 +688,6 @@ def get_catalog():
 
     tmdb_type = 'movie' if cat_type == 'movies' else 'tv'
 
-    # Build TMDB Discover params
     discover_params = {
         'api_key': TMDB_API_KEY,
         'language': 'ar-SA',
@@ -618,21 +696,17 @@ def get_catalog():
         'include_adult': 'false',
     }
 
-    # Section → with_original_language
     section_lang_map = {
-        '29': 'ar',   # عربي
-        '31': 'hi',   # هندي
-        '32': 'tr',   # تركي
-        # '30' (أجنبي) و '0' (الكل) → بدون فلتر لغة
+        '29': 'ar',
+        '31': 'hi',
+        '32': 'tr',
     }
     if section in section_lang_map:
         discover_params['with_original_language'] = section_lang_map[section]
 
-    # Category → with_genres (TMDB genre IDs)
     if category and category.isdigit():
         discover_params['with_genres'] = category
 
-    # Year filter
     if year and year.isdigit():
         if tmdb_type == 'movie':
             discover_params['primary_release_date.gte'] = f'{year}-01-01'
@@ -652,11 +726,10 @@ def get_catalog():
         total_pages = data.get('total_pages', 1)
         current_page = data.get('page', int(page))
 
-        # Build items with the same shape as /api/home and the old Akwam parser
         items = []
         for r in results:
             if not r.get('poster_path'):
-                continue  # skip items without posters
+                continue
             title = r.get('title') or r.get('name') or r.get('original_title') or 'غير متوفر'
             orig_title = r.get('original_title') or r.get('original_name') or ''
             date_field = r.get('release_date') or r.get('first_air_date') or ''
@@ -692,7 +765,6 @@ def get_catalog():
             },
         }
 
-        # v12.1: 24h cache for catalog (longer than 6h default — catalog is stable)
         set_cached(cache_key, result, ttl=24 * 3600)
         return jsonify(result)
 
@@ -778,7 +850,6 @@ def get_series_details():
     selected_season = request.args.get('season', '1').strip()
     target_year = request.args.get('year', '').strip()
 
-    # استخراج TMDB ID أولاً لضمان الاعتماد على قاعدة البيانات العالمية
     clean_tmdb_id = resolve_tmdb_tv_id(tmdb_id or series_url, title=title, orig_title=orig_title)
 
     cache_key = f'series:v3:{clean_tmdb_id or series_url}:{selected_season}'
@@ -786,9 +857,6 @@ def get_series_details():
     if cached is not None:
         return jsonify(cached)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # المسار الأساسي 1: بناء بنية المسلسل كاملة عبر TMDB (يمنع أي Mismatch)
-    # ══════════════════════════════════════════════════════════════════════════
     if clean_tmdb_id:
         try:
             tmdb_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}?api_key={TMDB_API_KEY}&language=ar-SA&append_to_response=credits,similar'
@@ -800,7 +868,6 @@ def get_series_details():
                 tv_orig_title = res_tv.get('original_name') or orig_title or tv_title
                 overview = res_tv.get('overview', '')
 
-                # طاقم التمثيل بالصور الحقيقية
                 cast = [
                     {
                         'name': c.get('name', ''),
@@ -810,7 +877,6 @@ def get_series_details():
                     for c in res_tv.get('credits', {}).get('cast', [])[:10]
                 ]
 
-                # المسلسلات المشابهة
                 similar = [
                     {
                         'id': str(s.get('id', '')),
@@ -827,7 +893,6 @@ def get_series_details():
                     if s.get('poster_path')
                 ]
 
-                # قائمة المواسم
                 seasons = []
                 for s in res_tv.get('seasons', []):
                     s_num = s.get('season_number', 0)
@@ -842,7 +907,6 @@ def get_series_details():
                 ep_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}/season/{season_num}?api_key={TMDB_API_KEY}&language=ar-SA'
                 res_ep = requests.get(ep_url, headers=TMDB_HEADERS, timeout=4).json()
 
-                # صياغة استعلامات بحث ذكية وموحدة للحلقات
                 episodes = []
                 clean_base_title = clean_query_term(tv_title)
                 clean_base_orig = clean_query_term(tv_orig_title)
@@ -873,10 +937,6 @@ def get_series_details():
         except Exception as tmdb_err:
             print(f'⚠️ TMDB Primary Architecture Error: {tmdb_err}')
 
-    # v12.1 (Phase 1 — Tiered Architecture): Akwam fallback removed.
-    # When TMDB can't resolve the show, the server returns empty episodes.
-    # The Android app detects this and scrapes Akwam locally on the user's
-    # device via GenericScraper.scrapeSeriesFallback().
     return jsonify({
         'status': 'success',
         'data': {
@@ -1011,6 +1071,94 @@ def handle_page_cache():
             return jsonify({'status': 'success', 'message': 'Cached successfully'})
 
         return jsonify({'status': 'error', 'message': 'Invalid payload'}), 400
+
+
+# ==============================================================================
+# 9. مسار البث العالمي السريع (Fast-Path TMDB REST API)
+# ==============================================================================
+
+def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1'):
+    """
+    استخراج روابط البث من مزودات عالمية مباشرة من السيرفر
+    مع حفظ النتيجة في Upstash Redis لمنع تكرار الطلبات.
+    """
+    cache_key = f"stream:global:{media_type}:{tmdb_id}:{season}:{episode}"
+    cached = get_cached(cache_key)
+    if cached:
+        return cached
+
+    stream_results = []
+
+    # 1. المصدر الأول: VidSrc ICU / Embed API
+    try:
+        if media_type == 'movie':
+            api_url = f"https://vidsrc.icu/embed/movie/{tmdb_id}"
+        else:
+            api_url = f"https://vidsrc.icu/embed/tv/{tmdb_id}/{season}/{episode}"
+
+        res = stealth_fetch(api_url, referer="https://vidsrc.icu/")
+        if res.status_code == 200:
+            m3u8_matches = re.findall(r'https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*', res.text)
+            if m3u8_matches:
+                stream_results.append({
+                    "url": m3u8_matches[0],
+                    "quality": 1080,
+                    "referer": "https://vidsrc.icu/",
+                    "source": "VidSrc-Fast"
+                })
+    except Exception as e:
+        print(f"⚠️ VidSrc Fetch Error: {e}")
+
+    # 2. المصدر الاحتياطي الثاني: AutoEmbed Direct API
+    if not stream_results:
+        try:
+            if media_type == 'movie':
+                fallback_url = f"https://player.autoembed.cc/embed/movie/{tmdb_id}"
+            else:
+                fallback_url = f"https://player.autoembed.cc/embed/tv/{tmdb_id}/{season}/{episode}"
+
+            res_fb = stealth_fetch(fallback_url, referer="https://player.autoembed.cc/")
+            if res_fb.status_code == 200:
+                matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_fb.text)
+                for m in matches:
+                    if "index" not in m and "preview" not in m:
+                        stream_results.append({
+                            "url": m,
+                            "quality": 1080,
+                            "referer": "https://player.autoembed.cc/",
+                            "source": "AutoEmbed-Fast"
+                        })
+                        break
+        except Exception as e:
+            print(f"⚠️ Fallback Fetch Error: {e}")
+
+    # حفظ الروابط في كاش Redis لمدة ساعتين
+    if stream_results:
+        set_cached(cache_key, stream_results, ttl=2 * 3600)
+
+    return stream_results
+
+
+@app.route('/api/stream', methods=['GET'])
+def get_stream_api():
+    """
+    واجهة الـ REST API التي يستدعيها تطبيق SilinaTV Pro مباشرة عبر:
+    GenericScraper.scrapeSpaRestApi() في أقل من 300ms.
+    """
+    tmdb_id = request.args.get('tmdb', '').strip()
+    media_type = request.args.get('type', 'movie').strip().lower()
+    season = request.args.get('season', '1').strip()
+    episode = request.args.get('episode', '1').strip()
+
+    if not tmdb_id:
+        return jsonify({'status': 'error', 'message': 'Missing tmdb parameter', 'links': []}), 400
+
+    links = resolve_global_stream(tmdb_id, media_type, season, episode)
+
+    return jsonify({
+        'status': 'success',
+        'links': links
+    })
 
 
 if __name__ == '__main__':
