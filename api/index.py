@@ -90,8 +90,8 @@ def clean_query_term(text):
 # 🥷 التقنية 2: محرك انتحال بصمة المتصفح (TLS / JA3 Spoofing with Safe Fallback)
 # ==============================================================================
 
-def stealth_fetch(url, referer=None, is_ajax=False):
-    """طلب فائق التخفي يطابق بصمة Google Chrome 124 مع Fallback آمن لمكتبة requests."""
+def stealth_fetch(url, referer=None, is_ajax=False, method='GET', data=None, json_data=None):
+    """طلب فائق التخفي يطابق بصمة Google Chrome 124 مع دعم كامل لطلبات GET و POST."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "application/json, text/javascript, */*; q=0.01" if is_ajax else "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -111,6 +111,16 @@ def stealth_fetch(url, referer=None, is_ajax=False):
 
     if HAS_CURL_CFFI:
         try:
+            if method.upper() == 'POST':
+                return stealth_requests.post(
+                    url,
+                    headers=headers,
+                    data=data,
+                    json=json_data,
+                    impersonate="chrome124",
+                    timeout=8,
+                    allow_redirects=True
+                )
             return stealth_requests.get(
                 url,
                 headers=headers,
@@ -121,6 +131,8 @@ def stealth_fetch(url, referer=None, is_ajax=False):
         except Exception:
             pass
 
+    if method.upper() == 'POST':
+        return requests.post(url, headers=headers, data=data, json=json_data, timeout=8, allow_redirects=True)
     return requests.get(url, headers=headers, timeout=8, allow_redirects=True)
 
 
@@ -516,7 +528,7 @@ def get_home():
                     if t.get('poster_path')
                 ]
         except Exception as e:
-            print(f"⚠️ Trending TV Error: {e}")
+            print(f"⚠️️ Trending TV Error: {e}")
 
         try:
             top_res = requests.get(
@@ -607,7 +619,7 @@ def get_home():
                     if t.get('poster_path')
                 ]
         except Exception as e:
-            print(f"⚠️ KDrama Error: {e}")
+            print(f"⚠️️ KDrama Error: {e}")
 
         sections_list = [
             {
@@ -1034,7 +1046,7 @@ def get_movie_details():
                         'id': str(s.get('id', '')),
                         'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(clean_query_term(s.get('original_title') or s.get('title', '')))}",
                         'title': s.get('title') or s.get('original_title', ''),
-                        'original_title': s.get('original_name', ''),
+                        'original_title': s.get('original_title', ''),
                         'poster': format_poster(s.get('poster_path')),
                         'backdrop': format_backdrop(s.get('backdrop_path') or s.get('poster_path')),
                         'rating': round(s.get('vote_average', 0), 1),
@@ -1114,13 +1126,13 @@ def unpack_dean_edwards(script_text):
         return script_text
 
 
-def resolve_vidsrc_buzz_internal(content, base_url, debug_logs):
+def resolve_vidsrc_buzz_internal(content, base_url, soup, debug_logs):
     """
-    استخراج مصفوفة السيرفرات التابعة لـ VidSrc واستدعاء نقاط الـ AJAX للحصول
-    على رابط البث المباشر النهائي.
+    استخراج السيرفرات الحقيقية عبر فحص سكربت المشغل الخارجي لـ vidsrc.buzz
+    ودعم طلبات POST و GET لاستخراج رابط الـ m3u8.
     """
     try:
-        # 1. استخراج كائن Q بالكامل
+        # 1. استخراج كائن Q
         q_match = re.search(r'var\s+Q\s*=\s*({.*?});\s*(?:var|</script>)', content, re.DOTALL)
         q_data = {}
         if q_match:
@@ -1148,103 +1160,109 @@ def resolve_vidsrc_buzz_internal(content, base_url, debug_logs):
                     except Exception:
                         pass
 
-        # 2. قراءة بيانات السيرفرات من كائن SSR
-        servers = q_data.get('ssr', {}).get('servers', [])
-        debug_logs.append(f"Found {len(servers)} servers in SSR")
-
-        candidate_endpoints = []
         parsed_b = urlparse(base_url)
         origin = f"{parsed_b.scheme}://{parsed_b.netloc}"
+
+        # 2. فحص السكربتات الخارجية التابعة للمشغل
+        script_tags = soup.find_all('script', src=True)
+        external_scripts = []
+        for s in script_tags:
+            src = s['src']
+            if not any(x in src for x in ['google', 'recaptcha', 'turnstile', 'cloudflare', 'analytics']):
+                if src.startswith('//'):
+                    src = 'https:' + src
+                elif src.startswith('/'):
+                    src = f"{origin}{src}"
+                external_scripts.append(src)
+
+        debug_logs.append(f"External Scripts: {external_scripts[:4]}")
+
+        # فحص أول سكريبت للمشغل للبحث عن روابط الـ AJAX الفعلية
+        discovered_routes = []
+        for s_url in external_scripts[:2]:
+            debug_logs.append(f"Reading Script: {s_url}")
+            res_s = stealth_fetch(s_url, referer=base_url)
+            if res_s.status_code == 200 and res_s.text:
+                # البحث عن مسارات fetch أو ajax
+                matches_routes = re.findall(r'''['"](/(?:api|ajax|server|source|play|stream)[^'"]+)['"]''', res_s.text)
+                discovered_routes.extend(matches_routes)
+                debug_logs.append(f"Found Routes in JS: {list(dict.fromkeys(matches_routes))[:6]}")
+
+        # 3. إعداد الروابط بناءً على السيرفرات والمسارات المستكشفة
+        servers = q_data.get('ssr', {}).get('servers', [])
+        test_requests = []
 
         for srv in servers:
             s_k = srv.get('k')
             s_ref = srv.get('ref')
-            s_c = None
-            s_i = None
 
-            if s_ref:
-                try:
-                    s_jwt = s_ref.split('.')[0]
-                    decoded = base64.b64decode(s_jwt + '=' * (-len(s_jwt) % 4)).decode('utf-8', errors='ignore')
-                    s_json = json.loads(decoded)
-                    s_c = s_json.get('c')
-                    s_i = s_json.get('i')
-                except Exception:
-                    pass
+            # تجربة المسارات المستكشفة من السكريبت
+            for r in list(dict.fromkeys(discovered_routes)):
+                # استبدال أي متغيرات في المسار
+                clean_r = r.replace(':id', str(s_k)).replace('{id}', str(s_k))
+                test_requests.append({'url': f"{origin}{clean_r}", 'method': 'GET'})
+                test_requests.append({'url': f"{origin}{clean_r}", 'method': 'POST', 'json': {'k': s_k, 'ref': s_ref}})
 
+            # إذا لم يتم اكتشاف مسارات واضحة، نجرب استدعاء الـ API المباشر مع الـ Hash
             if s_k:
-                candidate_endpoints.extend([
-                    f"{origin}/ajax/server/{s_k}",
-                    f"{origin}/ajax/source/{s_k}",
-                    f"{origin}/server/{s_k}",
-                    f"{origin}/source/{s_k}",
-                    f"{origin}/api/source/{s_k}",
-                ])
-            if s_c:
-                candidate_endpoints.extend([
-                    f"{origin}/ajax/server/{s_c}",
-                    f"{origin}/ajax/source/{s_c}",
-                ])
-            if s_i:
-                candidate_endpoints.extend([
-                    f"{origin}/ajax/server?id={s_i}",
-                    f"{origin}/ajax/server/{s_i}",
+                test_requests.extend([
+                    {'url': f"{origin}/api/source/{s_k}", 'method': 'GET'},
+                    {'url': f"{origin}/api/source/{s_k}", 'method': 'POST', 'json': {'ref': s_ref}},
+                    {'url': f"{origin}/ajax/embed/source/{s_k}", 'method': 'GET'},
+                    {'url': f"{origin}/ajax/embed/source/{s_k}", 'method': 'POST', 'data': {'hash': s_k, 'ref': s_ref}},
                 ])
 
-        # 3. فحص كود الجافاسكريبت للبحث عن أي مسار AJAX فعلي مسجل
-        pos_q = content.find("var Q")
-        if pos_q != -1:
-            end_script = content.find("</script>", pos_q)
-            if end_script != -1:
-                js_code = content[pos_q:end_script]
-                found_routes = re.findall(r'''['"](/(?:ajax|server|source|api)/[^'"]+)['"]''', js_code)
-                for r in found_routes:
-                    candidate_endpoints.append(f"{origin}{r}")
-                debug_logs.append(f"Inline script routes: {found_routes[:5]}")
+        # 4. تنفيذ الطلبات واستخراج البث
+        for req_item in test_requests[:10]:
+            t_url = req_item['url']
+            m_method = req_item['method']
+            debug_logs.append(f"Calling [{m_method}]: {t_url}")
+            res_req = stealth_fetch(
+                t_url,
+                referer=base_url,
+                is_ajax=True,
+                method=m_method,
+                data=req_item.get('data'),
+                json_data=req_item.get('json')
+            )
+            debug_logs.append(f"Status: {res_req.status_code} | Len: {len(res_req.text or '')}")
 
-        # 4. تجربة نقاط النهاية واستخراج الرابط النهائي
-        for target in list(dict.fromkeys(candidate_endpoints)):
-            debug_logs.append(f"Calling AJAX: {target}")
-            res_ajax = stealth_fetch(target, referer=base_url, is_ajax=True)
-            debug_logs.append(f"AJAX Status: {res_ajax.status_code} | Len: {len(res_ajax.text or '')}")
+            if res_req.status_code == 200 and res_req.text:
+                resp_text = res_req.text
+                if "eval(function(p,a,c,k,e,d)" in resp_text:
+                    resp_text = unpack_dean_edwards(resp_text)
 
-            if res_ajax.status_code == 200 and res_ajax.text:
-                ajax_text = res_ajax.text
-                if "eval(function(p,a,c,k,e,d)" in ajax_text:
-                    ajax_text = unpack_dean_edwards(ajax_text)
+                # فحص الروابط المباشرة
+                m3u8_list = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', resp_text)
+                for stream_candidate in m3u8_list:
+                    if not any(x in stream_candidate for x in ["preview", "index", ".js"]):
+                        debug_logs.append(f"Found Direct Stream: {stream_candidate}")
+                        return stream_candidate
 
-                # البحث المباشر عن رابط m3u8 أو mp4
-                stream_matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', ajax_text)
-                for s in stream_matches:
-                    if not any(x in s for x in ["preview", "index", ".js"]):
-                        debug_logs.append(f"Found Stream via AJAX: {s}")
-                        return s
-
-                # إذا أعاد الرد كائن JSON يحتوي على رابط أو iframe
+                # فحص استجابات JSON
                 try:
-                    res_json = json.loads(ajax_text)
-                    if isinstance(res_json, dict):
-                        for k_name in ['url', 'file', 'source', 'data', 'link']:
-                            val = str(res_json.get(k_name, ''))
+                    j_obj = json.loads(resp_text)
+                    if isinstance(j_obj, dict):
+                        for k_name in ['url', 'file', 'source', 'link', 'data']:
+                            val = str(j_obj.get(k_name, ''))
                             if val.startswith('http') and ('.m3u8' in val or '.mp4' in val):
-                                debug_logs.append(f"Found Stream in JSON [{k_name}]: {val}")
+                                debug_logs.append(f"Found Stream in JSON: {val}")
                                 return val
                             elif val.startswith(('http', '//')):
                                 if val.startswith('//'):
                                     val = 'https:' + val
-                                debug_logs.append(f"Testing Inner URL: {val}")
-                                res_val = stealth_fetch(val, referer=target)
-                                if res_val.status_code == 200:
-                                    inner_matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_val.text)
-                                    for im in inner_matches:
-                                        if not any(x in im for x in ["preview", "index", ".js"]):
-                                            debug_logs.append(f"Found Stream via JSON Inner: {im}")
-                                            return im
+                                res_v = stealth_fetch(val, referer=t_url)
+                                if res_v.status_code == 200:
+                                    sub_streams = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_v.text)
+                                    for sm in sub_streams:
+                                        if not any(x in sm for x in ["preview", "index", ".js"]):
+                                            debug_logs.append(f"Found Sub Stream: {sm}")
+                                            return sm
                 except Exception:
                     pass
 
     except Exception as e:
-        debug_logs.append(f"vidsrc.buzz Resolver Error: {str(e)}")
+        debug_logs.append(f"VidSrc Resolver Error: {str(e)}")
 
     return None
 
@@ -1269,7 +1287,7 @@ def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None)
 
         # 1. إذا كنا داخل مشغل vidsrc.buzz، نستخدم مفكك الشفرة المتخصص
         if "vidsrc.buzz" in target_url or "var Q" in content:
-            direct_stream = resolve_vidsrc_buzz_internal(content, target_url, debug_logs)
+            direct_stream = resolve_vidsrc_buzz_internal(content, target_url, soup, debug_logs)
             if direct_stream:
                 return direct_stream
 
