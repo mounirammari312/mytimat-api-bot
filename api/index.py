@@ -310,15 +310,18 @@ def get_config():
    {
         
     
-    'name': 'vidsrc',
-    'domain': 'https://vidsrc.to',
-    'search_path': '/embed/movie/{tmdb_id}',
+
+    'name': 'vidlink',
+    'domain': 'https://vidlink.pro',
+    'search_path': '/movie/{tmdb_id}',
     'card_selector': 'a',
     'movie_selector': 'a',
     'series_selector': 'a',
     'iframe_selector': 'iframe',
     'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
     'tmdb_mode': True,
+
+
 
 
 
