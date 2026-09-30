@@ -307,7 +307,7 @@ def get_config():
         'providers': [
             
             {
-                # المزود العالمي المباشر (TMDB Mode + WebView)
+                      
                 'name': 'multiembed-global',
                 'domain': 'https://multiembed.mov',
                 'search_path': '/?video_id={tmdb_id}&tmdb=1',
@@ -315,24 +315,33 @@ def get_config():
                 'movie_selector': 'iframe',
                 'series_selector': 'iframe',
                 'iframe_selector': 'iframe',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+                # إضافة .ts وخادم CDN إلى regex ليلتقطه التطبيق فور أول طلب
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|ts)[^\s"\'<>]*|https?://[^/]*iknowthatyourfatheris\.gay[^\s"\'<>]*',
                 'requires_unpack': False,
                 'ajax_required': False,
-                'requires_webview': True,   # تشغيل المشغل في الـ WebView لالتقاط البث
-                'tmdb_mode': True,          # تفعيل وضع TMDB المباشر وإلغاء البحث النصي
+                'requires_webview': True,
+                'tmdb_mode': True,
                 'extractor_script': r"""
                     (function() {
+                        try {
+                            // نقر زر التشغيل أو السيرفر آلياً في الخلفية
+                            var btn = document.querySelector('button, .play-btn, div[onclick*="play"], li[onclick*="play"]');
+                            if (btn) { btn.click(); }
+                        } catch(e) {}
+                        
                         var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
                         if (match) {
                             return {
                                 url: match[0],
-                                referer: __PAGE_URL__,
+                                referer: 'https://streamingnow.mov/',
                                 quality: '1080p Multi'
                             };
                         }
                         return null;
                     })();
                 """
+            
+
             },
 
 
