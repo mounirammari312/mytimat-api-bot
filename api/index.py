@@ -535,7 +535,7 @@ def get_home():
                     if m.get('poster_path')
                 ]
         except Exception as e:
-            print(f"⚠️️ Top Rated Error: {e}")
+            print(f"⚠️ Top Rated Error: {e}")
 
         try:
             action_url = f'{TMDB_BASE_URL}/discover/movie?api_key={TMDB_API_KEY}&with_genres=28&sort_by=popularity.desc&language=ar-SA'
@@ -1077,66 +1077,89 @@ def handle_page_cache():
 # 9. مسار البث العالمي السريع (Fast-Path TMDB REST API)
 # ==============================================================================
 
-def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1'):
-    """
-    استخراج روابط البث من مزودات عالمية مباشرة من السيرفر
-    مع حفظ النتيجة في Upstash Redis لمنع تكرار الطلبات.
-    """
+def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1', debug=False):
     cache_key = f"stream:global:{media_type}:{tmdb_id}:{season}:{episode}"
-    cached = get_cached(cache_key)
-    if cached:
-        return cached
+    if not debug:
+        cached = get_cached(cache_key)
+        if cached:
+            return cached, []
 
     stream_results = []
+    debug_logs = []
 
-    # 1. المصدر الأول: VidSrc ICU / Embed API
+    # 1. المصدر الأول: VidSrc / 2Embed
     try:
         if media_type == 'movie':
-            api_url = f"https://vidsrc.icu/embed/movie/{tmdb_id}"
+            target_url = f"https://vidsrc.net/embed/movie/{tmdb_id}"
         else:
-            api_url = f"https://vidsrc.icu/embed/tv/{tmdb_id}/{season}/{episode}"
+            target_url = f"https://vidsrc.net/embed/tv/{tmdb_id}/{season}/{episode}"
 
-        res = stealth_fetch(api_url, referer="https://vidsrc.icu/")
+        debug_logs.append(f"Fetching: {target_url}")
+        res = stealth_fetch(target_url, referer="https://vidsrc.net/")
+        debug_logs.append(f"Status: {res.status_code}")
+
         if res.status_code == 200:
-            m3u8_matches = re.findall(r'https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*', res.text)
-            if m3u8_matches:
-                stream_results.append({
-                    "url": m3u8_matches[0],
-                    "quality": 1080,
-                    "referer": "https://vidsrc.icu/",
-                    "source": "VidSrc-Fast"
-                })
-    except Exception as e:
-        print(f"⚠️ VidSrc Fetch Error: {e}")
+            matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res.text)
+            
+            if not matches:
+                soup = BeautifulSoup(res.text, 'html.parser')
+                iframe = soup.find('iframe')
+                if iframe and iframe.get('src'):
+                    iframe_url = iframe['src']
+                    if iframe_url.startswith('//'):
+                        iframe_url = 'https:' + iframe_url
+                    debug_logs.append(f"Found Iframe: {iframe_url}")
+                    
+                    res_iframe = stealth_fetch(iframe_url, referer=target_url)
+                    matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_iframe.text)
 
-    # 2. المصدر الاحتياطي الثاني: AutoEmbed Direct API
+            for m in matches:
+                if "preview" not in m and "index" not in m:
+                    stream_results.append({
+                        "url": m,
+                        "quality": 1080,
+                        "referer": target_url,
+                        "source": "VidSrc-Fast"
+                    })
+                    break
+    except Exception as e:
+        debug_logs.append(f"VidSrc Error: {str(e)}")
+
+    # 2. المصدر الثاني الاحتياطي: AutoEmbed
     if not stream_results:
         try:
             if media_type == 'movie':
-                fallback_url = f"https://player.autoembed.cc/embed/movie/{tmdb_id}"
+                auto_url = f"https://player.autoembed.cc/embed/movie/{tmdb_id}"
             else:
-                fallback_url = f"https://player.autoembed.cc/embed/tv/{tmdb_id}/{season}/{episode}"
+                auto_url = f"https://player.autoembed.cc/embed/tv/{tmdb_id}/{season}/{episode}"
 
-            res_fb = stealth_fetch(fallback_url, referer="https://player.autoembed.cc/")
-            if res_fb.status_code == 200:
-                matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_fb.text)
-                for m in matches:
-                    if "index" not in m and "preview" not in m:
-                        stream_results.append({
-                            "url": m,
-                            "quality": 1080,
-                            "referer": "https://player.autoembed.cc/",
-                            "source": "AutoEmbed-Fast"
-                        })
-                        break
+            debug_logs.append(f"Trying AutoEmbed: {auto_url}")
+            res_auto = stealth_fetch(auto_url, referer="https://player.autoembed.cc/")
+            if res_auto.status_code == 200:
+                soup = BeautifulSoup(res_auto.text, 'html.parser')
+                iframe = soup.find('iframe')
+                if iframe and iframe.get('src'):
+                    iframe_url = iframe['src']
+                    if iframe_url.startswith('//'):
+                        iframe_url = 'https:' + iframe_url
+                    res_ifr = stealth_fetch(iframe_url, referer=auto_url)
+                    matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_ifr.text)
+                    for m in matches:
+                        if "index" not in m:
+                            stream_results.append({
+                                "url": m,
+                                "quality": 1080,
+                                "referer": auto_url,
+                                "source": "AutoEmbed-Fast"
+                            })
+                            break
         except Exception as e:
-            print(f"⚠️ Fallback Fetch Error: {e}")
+            debug_logs.append(f"AutoEmbed Error: {str(e)}")
 
-    # حفظ الروابط في كاش Redis لمدة ساعتين
-    if stream_results:
+    if stream_results and not debug:
         set_cached(cache_key, stream_results, ttl=2 * 3600)
 
-    return stream_results
+    return stream_results, debug_logs
 
 
 @app.route('/api/stream', methods=['GET'])
@@ -1149,16 +1172,21 @@ def get_stream_api():
     media_type = request.args.get('type', 'movie').strip().lower()
     season = request.args.get('season', '1').strip()
     episode = request.args.get('episode', '1').strip()
+    debug = request.args.get('debug', '0') == '1'
 
     if not tmdb_id:
         return jsonify({'status': 'error', 'message': 'Missing tmdb parameter', 'links': []}), 400
 
-    links = resolve_global_stream(tmdb_id, media_type, season, episode)
+    links, debug_logs = resolve_global_stream(tmdb_id, media_type, season, episode, debug=debug)
 
-    return jsonify({
+    response = {
         'status': 'success',
         'links': links
-    })
+    }
+    if debug:
+        response['debug_logs'] = debug_logs
+
+    return jsonify(response)
 
 
 if __name__ == '__main__':
