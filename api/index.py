@@ -606,7 +606,7 @@ def get_home():
                     if t.get('poster_path')
                 ]
         except Exception as e:
-            print(f"⚠️️ KDrama Error: {e}")
+            print(f"⚠️ KDrama Error: {e}")
 
         sections_list = [
             {
@@ -1079,11 +1079,11 @@ def handle_page_cache():
 
 
 # ==============================================================================
-# 9. محرك فك تشفير Dean Edwards واستخراج الـ Streams عالمياً
+# 9. محرك فك تشفير VidSrc الداخلي واستخراج الـ Streams عالمياً
 # ==============================================================================
 
 def unpack_dean_edwards(script_text):
-    """فك تشفير كود جافاسكريبت المشفر بـ p,a,c,k,e,d لكشف روابط الفيديو المخفية."""
+    """فك تشفير كود جافاسكريبت المشفر بـ p,a,c,k,e,d لكشف روابط الفيديو المخفية[span_7](start_span)[span_7](end_span)."""
     pattern = r"\}\s*\(\s*['\"](.*?)['\"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['\"](.*?)['\"]\.split\(\s*['\"]\|['\"]\s*\)"
     match = re.search(pattern, script_text, re.DOTALL)
     if not match:
@@ -1113,23 +1113,100 @@ def unpack_dean_edwards(script_text):
         return script_text
 
 
-def try_extract_base64_stream(text):
-    """فحص نصوص Base64 واستخراج أي روابط ميديا مخفية بداخلها."""
-    b64_candidates = re.findall(r'[A-Za-z0-9+/=]{40,}', text)
-    for c in b64_candidates:
+def resolve_vidsrc_buzz_internal(content, base_url, debug_logs):
+    """
+    استخراج كائن var Q المشفر من صفحة vidsrc.buzz واستدعاء مسارات RCP
+    للحصول على مشغل الفيديو والـ m3u8 النهائي[span_8](start_span)[span_8](end_span).
+    """
+    try:
+        # 1. طباعة الجزء التنفيذي من السكربت للتحقق
+        pos = content.find("var Q")
+        if pos != -1:
+            snippet = ' '.join(content[pos:pos+500].split())
+            debug_logs.append(f"JS Engine: {snippet[:250]}")
+
+        # 2. استخراج كائن Q
+        q_match = re.search(r'var\s+Q\s*=\s*({[^;]+});', content)
+        if not q_match:
+            return None
+
+        q_json_str = q_match.group(1)
+        q_data = json.loads(q_json_str)
+        token = q_data.get('t', '')
+        debug_logs.append(f"Q Token Extracted: {token[:35]}...")
+
+        # 3. فك توكن Base64 واستخراج المفتاح الداخلي 'c'
+        c_val = None
         try:
-            decoded = base64.b64decode(c).decode('utf-8', errors='ignore')
-            if 'http' in decoded and ('.m3u8' in decoded or '.mp4' in decoded):
-                m = re.search(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', decoded)
-                if m:
-                    return m.group(0)
-        except Exception:
-            continue
+            padded_t = token + '=' * (-len(token) % 4)
+            decoded_t = base64.b64decode(padded_t).decode('utf-8', errors='ignore')
+            debug_logs.append(f"Decoded Token: {decoded_t[:60]}")
+            if '"c":' in decoded_t:
+                c_data = json.loads(decoded_t)
+                c_val = c_data.get('c')
+                debug_logs.append(f"RCP Key (c): {c_val}")
+        except Exception as b64_err:
+            debug_logs.append(f"Base64 parse error: {b64_err}")
+
+        # 4. استدعاء مسارات المشغل الداخلي
+        endpoints_to_try = []
+        if c_val:
+            endpoints_to_try.extend([
+                f"https://vidsrc.buzz/rcp/{c_val}",
+                f"https://vidsrc.buzz/prorcp/{c_val}"
+            ])
+        if token:
+            endpoints_to_try.extend([
+                f"https://vidsrc.buzz/rcp/{token}",
+                f"https://vidsrc.buzz/prorcp/{token}"
+            ])
+
+        # البحث أيضاً عن أي روابط API نسبية مذكورة في الصفحة
+        apis = re.findall(r'["\'](/(?:rcp|prorcp|api/source|ajax/[^"\']+|embed/[^"\']+)["\']', content)
+        for ep in apis:
+            endpoints_to_try.append(f"https://vidsrc.buzz{ep}")
+
+        for target in list(dict.fromkeys(endpoints_to_try)):
+            debug_logs.append(f"Calling Internal RCP: {target}")
+            res_rcp = stealth_fetch(target, referer=base_url)
+            debug_logs.append(f"RCP Status: {res_rcp.status_code} | Len: {len(res_rcp.text or '')}")
+
+            if res_rcp.status_code == 200 and res_rcp.text:
+                rcp_text = res_rcp.text
+                if "eval(function(p,a,c,k,e,d)" in rcp_text:
+                    rcp_text = unpack_dean_edwards(rcp_text)
+
+                # البحث عن رابط البث المباشر
+                m_matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', rcp_text)
+                for stream_candidate in m_matches:
+                    if not any(x in stream_candidate for x in ["preview", "index", "sample", ".js"]):
+                        debug_logs.append(f"Found Final Stream: {stream_candidate}")
+                        return stream_candidate
+
+                # فحص الـ iframes داخل رد الـ RCP
+                soup_rcp = BeautifulSoup(rcp_text, 'html.parser')
+                for ifr in soup_rcp.find_all('iframe'):
+                    src = ifr.get('src') or ifr.get('data-src') or ''
+                    if src and src.startswith(('http', '//')):
+                        if src.startswith('//'):
+                            src = 'https:' + src
+                        debug_logs.append(f"RCP Inner Iframe: {src}")
+                        res_inner = stealth_fetch(src, referer=target)
+                        if res_inner.status_code == 200:
+                            inner_matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_inner.text)
+                            for s in inner_matches:
+                                if not any(x in s for x in ["preview", "index", ".js"]):
+                                    debug_logs.append(f"Found Stream (Inner): {s}")
+                                    return s
+
+    except Exception as e:
+        debug_logs.append(f"vidsrc.buzz Resolver Error: {str(e)}")
+
     return None
 
 
 def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None):
-    """دالة تتبع متقدمة للغوص داخل الـ iframes والسكربتات واستخراج روابط HLS المباشرة."""
+    """دالة تتبع متقدمة للغوص داخل الـ iframes والسكربتات واستخراج روابط HLS المباشرة[span_9](start_span)[span_9](end_span)."""
     if debug_logs is None:
         debug_logs = []
 
@@ -1146,59 +1223,20 @@ def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None)
         page_title = soup.title.string.strip() if soup.title and soup.title.string else 'No Title'
         debug_logs.append(f"Title: {page_title[:60]}")
 
-        # 1. البحث الصريح عن روابط m3u8 أو mp4 في النص الخام
+        # 1. إذا كنا داخل مشغل vidsrc.buzz، نستخدم مفكك الشفرة المتخصص
+        if "vidsrc.buzz" in target_url or "var Q" in content:
+            direct_stream = resolve_vidsrc_buzz_internal(content, target_url, debug_logs)
+            if direct_stream:
+                return direct_stream
+
+        # 2. البحث الصريح عن روابط m3u8 أو mp4 في النص الخام
         matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', content)
         for m in matches:
             if not any(x in m for x in ["preview", "index", "sample", ".js"]):
                 debug_logs.append(f"Found Stream: {m}")
                 return m
 
-        # 2. فحص وتفكيك نصوص Base64
-        b64_stream = try_extract_base64_stream(content)
-        if b64_stream:
-            debug_logs.append(f"Found Base64 Stream: {b64_stream}")
-            return b64_stream
-
-        # 3. فحص أكواد السكربتات وفك تشفير Dean Edwards
-        scripts = soup.find_all('script')
-        combined_text = content
-        script_hints = []
-        for s in scripts:
-            s_text = s.string or s.text or ''
-            if "eval(function(p,a,c,k,e,d)" in s_text:
-                unpacked = unpack_dean_edwards(s_text)
-                combined_text += "\n" + unpacked
-
-            # البحث عن إشارات مفيدة تفيد في التشخيص
-            if any(k in s_text for k in ['player', 'source', 'hls', 'fetch', 'ajax', 'm3u8']):
-                clean_snippet = ' '.join(s_text[:120].split())
-                if clean_snippet:
-                    script_hints.append(clean_snippet)
-
-        if script_hints:
-            debug_logs.append(f"Script Hints: {script_hints[:3]}")
-
-        # إعادة فحص الروابط بعد فك تشفير السكربتات
-        matches_unpacked = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', combined_text)
-        for m in matches_unpacked:
-            if not any(x in m for x in ["preview", "index", "sample", ".js"]):
-                debug_logs.append(f"Found Stream (Unpacked): {m}")
-                return m
-
-        # 4. البحث عن استدعاءات API أو مسارات Ajax التابعة لـ VidSrc
-        ajax_calls = re.findall(r'["\'](/ajax/[^"\']+|/api/[^"\']+|/rcp/[^"\']+|/prorcp/[^"\']+)["\']', combined_text)
-        for ep in ajax_calls:
-            parsed = urlparse(target_url)
-            full_api = f"{parsed.scheme}://{parsed.netloc}{ep}"
-            debug_logs.append(f"Calling VidSrc API: {full_api}")
-            res_api = stealth_fetch(full_api, referer=target_url)
-            if res_api.status_code == 200:
-                api_m = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_api.text)
-                if api_m:
-                    debug_logs.append(f"Found API Stream: {api_m[0]}")
-                    return api_m[0]
-
-        # 5. فحص الـ iframes
+        # 3. فحص الـ iframes
         if depth > 0:
             iframes = soup.find_all('iframe')
             debug_logs.append(f"Found {len(iframes)} iframes in depth {depth}")
@@ -1230,7 +1268,7 @@ def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None)
 
 
 def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1', debug=False):
-    """محرك فحص متعدد السيرفرات لأشهر مزودات TMDB العالمية مع كاش فائق السرعة."""
+    """محرك فحص متعدد السيرفرات لأشهر مزودات TMDB العالمية مع كاش فائق السرعة[span_10](start_span)[span_10](end_span)."""
     cache_key = f"stream:global:{media_type}:{tmdb_id}:{season}:{episode}"
     if not debug:
         cached = get_cached(cache_key)
@@ -1240,22 +1278,17 @@ def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1', 
     stream_results = []
     debug_logs = []
 
-    # قائمة بالمزودات العالمية النشطة (مع التركيز على شبكة VidSrc الناجحة)
+    # قائمة المزودات العالمية النشطة
     sources = [
-        {
-            "name": "2Embed-VidSrc",
-            "url": f"https://www.2embed.cc/embed/{tmdb_id}" if media_type == 'movie' else f"https://www.2embed.cc/embedtv/{tmdb_id}&s={season}&e={episode}",
-            "referer": "https://www.2embed.cc/"
-        },
         {
             "name": "VidSrc-Buzz-Direct",
             "url": f"https://vidsrc.buzz/embed/movie/{tmdb_id}" if media_type == 'movie' else f"https://vidsrc.buzz/embed/tv/{tmdb_id}/{season}/{episode}",
             "referer": "https://vidsrc.buzz/"
         },
         {
-            "name": "VidSrc-CC",
-            "url": f"https://vidsrc.cc/v2/embed/movie/{tmdb_id}" if media_type == 'movie' else f"https://vidsrc.cc/v2/embed/tv/{tmdb_id}/{season}/{episode}",
-            "referer": "https://vidsrc.cc/"
+            "name": "2Embed-VidSrc",
+            "url": f"https://www.2embed.cc/embed/{tmdb_id}" if media_type == 'movie' else f"https://www.2embed.cc/embedtv/{tmdb_id}&s={season}&e={episode}",
+            "referer": "https://www.2embed.cc/"
         }
     ]
 
