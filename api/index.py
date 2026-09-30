@@ -837,7 +837,7 @@ def search():
         return jsonify(result)
 
     except Exception as e:
-        print(f"⚠️ Search Error: {e}")
+        print(f"⚠️️ Search Error: {e}")
         return jsonify({'status': 'success', 'data': []})
 
 
@@ -1113,45 +1113,53 @@ def unpack_dean_edwards(script_text):
 
 
 def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None):
-    """دالة تتبع متقدمة للغوص داخل الـ iframes واستخراج روابط HLS المباشرة."""
+    """دالة تتبع متقدمة للغوص داخل الـ iframes والسكربتات واستخراج روابط HLS المباشرة."""
     if debug_logs is None:
         debug_logs = []
 
     try:
         debug_logs.append(f"Visiting [depth {depth}]: {target_url}")
         res = stealth_fetch(target_url, referer=referer)
-        debug_logs.append(f"Status: {res.status_code}")
+        debug_logs.append(f"Status: {res.status_code} | Len: {len(res.text or '')}")
 
         if res.status_code != 200 or not res.text:
             return None
 
-        # فك تشفير أي أكواد جافاسكريبت معبأة
         content = res.text
-        if "eval(function(p,a,c,k,e,d)" in content:
-            debug_logs.append("Unpacking Dean Edwards JS...")
-            content = unpack_dean_edwards(content)
+        soup = BeautifulSoup(content, 'html.parser')
+        page_title = soup.title.string.strip() if soup.title and soup.title.string else 'No Title'
+        debug_logs.append(f"Title: {page_title[:60]}")
 
-        # 1. البحث المباشر عن روابط m3u8 أو mp4
-        matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', content)
+        # 1. البحث في أكواد السكربتات وفك تشفير أي سكربت معبأ
+        scripts = soup.find_all('script')
+        combined_text = content
+        for s in scripts:
+            s_text = s.string or s.text or ''
+            if "eval(function(p,a,c,k,e,d)" in s_text:
+                unpacked = unpack_dean_edwards(s_text)
+                combined_text += "\n" + unpacked
+
+        # 2. البحث الصريح عن روابط m3u8 أو mp4
+        matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', combined_text)
         for m in matches:
-            if "preview" not in m and "index" not in m and "sample" not in m:
+            if not any(x in m for x in ["preview", "index", "sample", ".js"]):
                 debug_logs.append(f"Found Stream: {m}")
                 return m
 
-        # البحث عن ملفات m3u8 بدون امتداد صريح (مثل file: "..." أو source: "...")
-        json_stream = re.search(r'["\'](?:file|source|url)["\']\s*:\s*["\'](https?://[^\s"\']+)["\']', content)
-        if json_stream:
-            cand = json_stream.group(1).replace('\\/', '/')
+        # 3. البحث عن الروابط المعرفة كـ JSON داخل الكود (مثل file: "..." أو source: "...")
+        json_matches = re.findall(r'["\'](?:file|source|url|link)["\']\s*:\s*["\'](https?://[^\s"\']+)["\']', combined_text)
+        for cand in json_matches:
+            cand = cand.replace('\\/', '/')
             if "m3u8" in cand or "mp4" in cand:
                 debug_logs.append(f"Found Config Stream: {cand}")
                 return cand
 
-        # 2. فحص iframes مع تجاوز الـ Lazy-Loading (تخطي about:blank)
+        # 4. فحص iframes والبحث داخلها
         if depth > 0:
-            soup = BeautifulSoup(res.text, 'html.parser')
             iframes = soup.find_all('iframe')
+            debug_logs.append(f"Found {len(iframes)} iframes in depth {depth}")
+
             for ifr in iframes:
-                # التقاط الرابط الحقيقي حتى لو كان مخفياً في data-src
                 raw_src = ifr.get('src') or ''
                 if not raw_src or raw_src.strip() in ['about:blank', 'javascript:void(0)', '#']:
                     raw_src = ifr.get('data-src') or ifr.get('data-url') or ifr.get('data-lazy-src') or ''
@@ -1165,8 +1173,8 @@ def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None)
                     parsed = urlparse(target_url)
                     raw_src = f"{parsed.scheme}://{parsed.netloc}{raw_src}"
 
-                # استبعاد الإعلانات ومحركات الحماية
-                if any(x in raw_src for x in ['google', 'facebook', 'recaptcha', 'cloudflare', 'turnstile']):
+                # استبعاد الإعلانات ومحركات الحماية فقط
+                if any(x in raw_src for x in ['google', 'facebook', 'recaptcha', 'turnstile', 'doubleclick']):
                     continue
 
                 found = extract_stream_from_page(raw_src, referer=target_url, depth=depth-1, debug_logs=debug_logs)
@@ -1189,27 +1197,27 @@ def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1', 
     stream_results = []
     debug_logs = []
 
-    # قائمة بالمزودات العالمية النشطة والموثوقة
+    # قائمة بأقوى سيرفرات التشغيل العالمية المباشرة
     sources = [
+        {
+            "name": "SmashyStream-CF",
+            "url": f"https://embed.smashystream.com/cf.php?tmdb={tmdb_id}" if media_type == 'movie' else f"https://embed.smashystream.com/cf.php?tmdb={tmdb_id}&season={season}&episode={episode}",
+            "referer": "https://embed.smashystream.com/"
+        },
+        {
+            "name": "SmashyStream-FFalcon",
+            "url": f"https://embed.smashystream.com/ffalcon.php?tmdb={tmdb_id}" if media_type == 'movie' else f"https://embed.smashystream.com/ffalcon.php?tmdb={tmdb_id}&season={season}&episode={episode}",
+            "referer": "https://embed.smashystream.com/"
+        },
         {
             "name": "2Embed",
             "url": f"https://www.2embed.cc/embed/{tmdb_id}" if media_type == 'movie' else f"https://www.2embed.cc/embedtv/{tmdb_id}&s={season}&e={episode}",
             "referer": "https://www.2embed.cc/"
         },
         {
-            "name": "SmashyStream",
-            "url": f"https://embed.smashystream.com/playere.php?tmdb={tmdb_id}" if media_type == 'movie' else f"https://embed.smashystream.com/playere.php?tmdb={tmdb_id}&season={season}&episode={episode}",
-            "referer": "https://embed.smashystream.com/"
-        },
-        {
-            "name": "VidSrc-PM",
-            "url": f"https://vidsrc.pm/embed/movie/{tmdb_id}" if media_type == 'movie' else f"https://vidsrc.pm/embed/tv/{tmdb_id}/{season}/{episode}",
-            "referer": "https://vidsrc.pm/"
-        },
-        {
-            "name": "VidSrc-IN",
-            "url": f"https://vidsrc.in/embed/movie/{tmdb_id}" if media_type == 'movie' else f"https://vidsrc.pm/embed/tv/{tmdb_id}/{season}/{episode}",
-            "referer": "https://vidsrc.in/"
+            "name": "VidSrc-ICU",
+            "url": f"https://vidsrc.icu/embed/movie/{tmdb_id}" if media_type == 'movie' else f"https://vidsrc.icu/embed/tv/{tmdb_id}/{season}/{episode}",
+            "referer": "https://vidsrc.icu/"
         }
     ]
 
