@@ -1096,7 +1096,7 @@ def handle_page_cache():
 # ==============================================================================
 
 def unpack_dean_edwards(script_text):
-    """فك تشفير كود جافاسكريبت المشفر بـ p,a,c,k,e,d لكشف روابط الفيديو المخفية[span_7](start_span)[span_7](end_span)."""
+    """فك تشفير كود جافاسكريبت المشفر بـ p,a,c,k,e,d لكشف روابط الفيديو المخفية[span_3](start_span)[span_3](end_span)."""
     pattern = r"\}\s*\(\s*['\"](.*?)['\"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['\"](.*?)['\"]\.split\(\s*['\"]\|['\"]\s*\)"
     match = re.search(pattern, script_text, re.DOTALL)
     if not match:
@@ -1128,8 +1128,8 @@ def unpack_dean_edwards(script_text):
 
 def resolve_vidsrc_buzz_internal(content, base_url, soup, debug_logs):
     """
-    استخراج السيرفرات الحقيقية عبر فحص السكربتات الداخلية في vidsrc.buzz
-    واستخراج روابط الـ m3u8 أو مسارات الـ iframe المباشرة[span_8](start_span)[span_8](end_span).
+    استخراج المشغل الفعلي من مسار swish التابع لـ vidsrc.buzz
+    وفك تشفير HLS.js والـ m3u8 النهائي[span_4](start_span)[span_4](end_span).
     """
     try:
         # 1. استخراج كائن Q بالكامل
@@ -1160,53 +1160,78 @@ def resolve_vidsrc_buzz_internal(content, base_url, soup, debug_logs):
                     except Exception:
                         pass
 
-        # 2. طباعة كافة حقول Q الهامة
-        q_inspect = {k: v for k, v in q_data.items() if k not in ['ssr', 't']}
-        debug_logs.append(f"Q Fields: {json.dumps(q_inspect)}")
+        parsed_b = urlparse(base_url)
+        origin = f"{parsed_b.scheme}://{parsed_b.netloc}"
 
-        servers = q_data.get('ssr', {}).get('servers', [])
-        if servers:
-            debug_logs.append(f"Server 0 Complete: {json.dumps(servers[0])}")
+        # 2. المسار الأساسي الأول: استدعاء صفحة مشغل swish المكتشفة
+        swish_path = q_data.get('swish', '')
+        if swish_path:
+            swish_url = f"{origin}{swish_path}" if swish_path.startswith('/') else swish_path
+            debug_logs.append(f"Visiting Swish Player: {swish_url}")
+            res_swish = stealth_fetch(swish_url, referer=base_url)
+            debug_logs.append(f"Swish Status: {res_swish.status_code} | Len: {len(res_swish.text or '')}")
 
-        # 3. فحص الأكواد الداخلية (Inline Scripts) التي تحوي منطق المشغل الفعلي
-        inline_scripts = soup.find_all('script', src=False)
-        debug_logs.append(f"Inline script count: {len(inline_scripts)}")
+            if res_swish.status_code == 200 and res_swish.text:
+                swish_html = res_swish.text
+                if "eval(function(p,a,c,k,e,d)" in swish_html:
+                    debug_logs.append("Unpacking Dean Edwards in Swish...")
+                    swish_html = unpack_dean_edwards(swish_html)
 
-        logic_snippets = []
-        found_urls_in_scripts = []
-
-        for i, s in enumerate(inline_scripts):
-            txt = s.string or s.text or ''
-            if not txt:
-                continue
-
-            # البحث عن الروابط والنطاقات داخل السكربت الداخلي
-            found_urls = re.findall(r'https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}[^\s"\'<>]*', txt)
-            filtered_urls = [u for u in found_urls if not any(x in u for x in ['google', 'schema.org', 'w3.org', 'tmdb'])]
-            if filtered_urls:
-                found_urls_in_scripts.extend(filtered_urls)
-
-            # البحث عن منطق تحميل المشغل أو الـ iframe
-            if any(w in txt for w in ['servers', 'iframe', 'player', 'src', 'fetch', 'ajax', 'post', 'get']):
-                matches = re.findall(r'.{0,70}(?:servers|iframe|\.src|setAttribute|fetch|ajax).{0,70}', txt)
-                for m in matches[:3]:
-                    logic_snippets.append(' '.join(m.split()))
-
-        if found_urls_in_scripts:
-            debug_logs.append(f"Discovered Script URLs: {list(dict.fromkeys(found_urls_in_scripts))[:5]}")
-        if logic_snippets:
-            debug_logs.append(f"Script Logic Snippets: {logic_snippets[:4]}")
-
-        # 4. تجربة الروابط المكتشفة مباشرة
-        for target_cand in list(dict.fromkeys(found_urls_in_scripts)):
-            debug_logs.append(f"Testing Script URL: {target_cand}")
-            res_cand = stealth_fetch(target_cand, referer=base_url)
-            if res_cand.status_code == 200 and res_cand.text:
-                m3u8_matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_cand.text)
+                # البحث المباشر عن m3u8
+                m3u8_matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', swish_html)
                 for sm in m3u8_matches:
                     if not any(x in sm for x in ["preview", "index", ".js"]):
-                        debug_logs.append(f"Found Stream via Script URL: {sm}")
+                        debug_logs.append(f"Found Stream in Swish: {sm}")
                         return sm
+
+                # البحث عن المتغيرات البرمجية المسؤولة عن الفيديو في مشغل HLS
+                hls_sources = re.findall(r'["\'](?:file|source|url|hls)["\']\s*:\s*["\'](https?://[^\s"\']+)["\']', swish_html)
+                for cand in hls_sources:
+                    cand = cand.replace('\\/', '/')
+                    if "m3u8" in cand or "mp4" in cand:
+                        debug_logs.append(f"Found Config Stream in Swish: {cand}")
+                        return cand
+
+                # فحص iframes داخل مشغل swish
+                soup_swish = BeautifulSoup(swish_html, 'html.parser')
+                for ifr in soup_swish.find_all('iframe'):
+                    src = ifr.get('src') or ifr.get('data-src') or ''
+                    if src and src.startswith(('http', '//')):
+                        if src.startswith('//'):
+                            src = 'https:' + src
+                        debug_logs.append(f"Swish Inner Iframe: {src}")
+                        res_inner = stealth_fetch(src, referer=swish_url)
+                        if res_inner.status_code == 200:
+                            inner_matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_inner.text)
+                            for s in inner_matches:
+                                if not any(x in s for x in ["preview", "index", ".js"]):
+                                    debug_logs.append(f"Found Stream via Swish Inner: {s}")
+                                    return s
+
+        # 3. المسار الاحتياطي الثاني: تجربة مسارات مشغلات السيرفرات الأخرى في مجلد /pl/
+        servers = q_data.get('ssr', {}).get('servers', [])
+        for srv in servers:
+            s_k = srv.get('k')
+            s_ref = srv.get('ref')
+            if s_k:
+                pl_urls = [
+                    f"{origin}/pl/player.php?k={s_k}",
+                    f"{origin}/pl/playervne.php?k={s_k}",
+                    f"{origin}/pl/player.php?ref={s_ref}"
+                ]
+                for pl_target in pl_urls:
+                    debug_logs.append(f"Calling PL Player: {pl_target}")
+                    res_pl = stealth_fetch(pl_target, referer=base_url)
+                    debug_logs.append(f"PL Status: {res_pl.status_code} | Len: {len(res_pl.text or '')}")
+                    if res_pl.status_code == 200 and res_pl.text:
+                        pl_text = res_pl.text
+                        if "eval(function(p,a,c,k,e,d)" in pl_text:
+                            pl_text = unpack_dean_edwards(pl_text)
+                        pl_matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', pl_text)
+                        for pm in pl_matches:
+                            if not any(x in pm for x in ["preview", "index", ".js"]):
+                                debug_logs.append(f"Found Stream in PL Player: {pm}")
+                                return pm
 
     except Exception as e:
         debug_logs.append(f"VidSrc Buzz Resolver Error: {str(e)}")
@@ -1215,7 +1240,7 @@ def resolve_vidsrc_buzz_internal(content, base_url, soup, debug_logs):
 
 
 def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None):
-    """دالة تتبع متقدمة للغوص داخل الـ iframes والسكربتات واستخراج روابط HLS المباشرة[span_9](start_span)[span_9](end_span)."""
+    """دالة تتبع متقدمة للغوص داخل الـ iframes والسكربتات واستخراج روابط HLS المباشرة[span_5](start_span)[span_5](end_span)."""
     if debug_logs is None:
         debug_logs = []
 
@@ -1277,7 +1302,7 @@ def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None)
 
 
 def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1', debug=False):
-    """محرك فحص متعدد السيرفرات لأشهر مزودات TMDB العالمية مع كاش فائق السرعة[span_10](start_span)[span_10](end_span)."""
+    """محرك فحص متعدد السيرفرات لأشهر مزودات TMDB العالمية مع كاش فائق السرعة[span_6](start_span)[span_6](end_span)."""
     cache_key = f"stream:global:{media_type}:{tmdb_id}:{season}:{episode}"
     if not debug:
         cached = get_cached(cache_key)
@@ -1326,7 +1351,7 @@ def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1', 
 def get_stream_api():
     """
     واجهة الـ REST API التي يستدعيها تطبيق SilinaTV Pro مباشرة عبر:
-    GenericScraper.scrapeSpaRestApi() في أقل من 300ms[span_11](start_span)[span_11](end_span).
+    GenericScraper.scrapeSpaRestApi() في أقل من 300ms[span_7](start_span)[span_7](end_span).
     """
     tmdb_id = request.args.get('tmdb', '').strip()
     media_type = request.args.get('type', 'movie').strip().lower()
