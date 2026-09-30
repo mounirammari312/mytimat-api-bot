@@ -308,14 +308,19 @@ def get_config():
         'providers': [
 
    {
-        'name': 'movish',
-        'domain': 'https://movish.to',
-        'search_path': '/embed/movie/{tmdb_id}',
-        'tmdb_mode': True,
-        'link_regex': r'''https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*''',
-        'requires_unpack': False,
-        'active_headers': get_vault_session("movish", "https://movish.to"),
-    },  # dynamic-iframe
+        
+    'name': 'atlantic',
+    'domain': 'https://atlantic.st',
+    'search_path': '/embed/movie/{tmdb_id}',
+    'card_selector': 'a',
+    'movie_selector': 'a',
+    'series_selector': 'a',
+    'iframe_selector': 'iframe',
+    'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
+    'tmdb_mode': True,
+
+
+    },  
 
 
 
