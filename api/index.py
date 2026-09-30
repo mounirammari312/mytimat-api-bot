@@ -1083,7 +1083,7 @@ def handle_page_cache():
 # ==============================================================================
 
 def unpack_dean_edwards(script_text):
-    """فك تشفير كود جافاسكريبت المشفر بـ p,a,c,k,e,d لكشف روابط الفيديو المخفية[span_7](start_span)[span_7](end_span)."""
+    """فك تشفير كود جافاسكريبت المشفر بـ p,a,c,k,e,d لكشف روابط الفيديو المخفية."""
     pattern = r"\}\s*\(\s*['\"](.*?)['\"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['\"](.*?)['\"]\.split\(\s*['\"]\|['\"]\s*\)"
     match = re.search(pattern, script_text, re.DOTALL)
     if not match:
@@ -1113,19 +1113,28 @@ def unpack_dean_edwards(script_text):
         return script_text
 
 
+def try_extract_base64_stream(text):
+    """فحص نصوص Base64 واستخراج أي روابط ميديا مخفية بداخلها."""
+    b64_candidates = re.findall(r'[A-Za-z0-9+/=]{40,}', text)
+    for c in b64_candidates:
+        try:
+            decoded = base64.b64decode(c).decode('utf-8', errors='ignore')
+            if 'http' in decoded and ('.m3u8' in decoded or '.mp4' in decoded):
+                m = re.search(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', decoded)
+                if m:
+                    return m.group(0)
+        except Exception:
+            continue
+    return None
+
+
 def resolve_vidsrc_buzz_internal(content, base_url, debug_logs):
     """
     استخراج كائن var Q المشفر من صفحة vidsrc.buzz واستدعاء مسارات RCP
-    للحصول على مشغل الفيديو والـ m3u8 النهائي[span_8](start_span)[span_8](end_span).
+    للحصول على مشغل الفيديو والـ m3u8 النهائي.
     """
     try:
-        # 1. طباعة الجزء التنفيذي من السكربت للتحقق
-        pos = content.find("var Q")
-        if pos != -1:
-            snippet = ' '.join(content[pos:pos+500].split())
-            debug_logs.append(f"JS Engine: {snippet[:250]}")
-
-        # 2. استخراج كائن Q
+        # 1. استخراج كائن Q بالكامل
         q_match = re.search(r'var\s+Q\s*=\s*({[^;]+});', content)
         if not q_match:
             return None
@@ -1135,12 +1144,13 @@ def resolve_vidsrc_buzz_internal(content, base_url, debug_logs):
         token = q_data.get('t', '')
         debug_logs.append(f"Q Token Extracted: {token[:35]}...")
 
-        # 3. فك توكن Base64 واستخراج المفتاح الداخلي 'c'
+        # 2. فك توكن Base64 (فصل الجزء الأول قبل النقطة لتجنب Extra data error)
         c_val = None
         try:
-            padded_t = token + '=' * (-len(token) % 4)
+            jwt_payload = token.split('.')[0] if '.' in token else token
+            padded_t = jwt_payload + '=' * (-len(jwt_payload) % 4)
             decoded_t = base64.b64decode(padded_t).decode('utf-8', errors='ignore')
-            debug_logs.append(f"Decoded Token: {decoded_t[:60]}")
+            debug_logs.append(f"Decoded Token Clean: {decoded_t[:60]}")
             if '"c":' in decoded_t:
                 c_data = json.loads(decoded_t)
                 c_val = c_data.get('c')
@@ -1148,7 +1158,7 @@ def resolve_vidsrc_buzz_internal(content, base_url, debug_logs):
         except Exception as b64_err:
             debug_logs.append(f"Base64 parse error: {b64_err}")
 
-        # 4. استدعاء مسارات المشغل الداخلي
+        # 3. إعداد مسارات المشغل الداخلي
         endpoints_to_try = []
         if c_val:
             endpoints_to_try.extend([
@@ -1161,11 +1171,15 @@ def resolve_vidsrc_buzz_internal(content, base_url, debug_logs):
                 f"https://vidsrc.buzz/prorcp/{token}"
             ])
 
-        # البحث أيضاً عن أي روابط API نسبية مذكورة في الصفحة
-        apis = re.findall(r'["\'](/(?:rcp|prorcp|api/source|ajax/[^"\']+|embed/[^"\']+)["\']', content)
-        for ep in apis:
-            endpoints_to_try.append(f"https://vidsrc.buzz{ep}")
+        # فحص كود الجافاسكريبت المحيط بـ Q لاستخراج أي مسار نسبي
+        pos = content.find("var Q")
+        if pos != -1:
+            js_area = content[pos:pos+1500]
+            relative_apis = re.findall(r'''['"](/(?:rcp|prorcp|ajax|api|source)[^'"]+)['"]''', js_area)
+            for rap in relative_apis:
+                endpoints_to_try.append(f"https://vidsrc.buzz{rap}")
 
+        # 4. استدعاء مسارات RCP
         for target in list(dict.fromkeys(endpoints_to_try)):
             debug_logs.append(f"Calling Internal RCP: {target}")
             res_rcp = stealth_fetch(target, referer=base_url)
@@ -1206,7 +1220,7 @@ def resolve_vidsrc_buzz_internal(content, base_url, debug_logs):
 
 
 def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None):
-    """دالة تتبع متقدمة للغوص داخل الـ iframes والسكربتات واستخراج روابط HLS المباشرة[span_9](start_span)[span_9](end_span)."""
+    """دالة تتبع متقدمة للغوص داخل الـ iframes والسكربتات واستخراج روابط HLS المباشرة."""
     if debug_logs is None:
         debug_logs = []
 
@@ -1268,7 +1282,7 @@ def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None)
 
 
 def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1', debug=False):
-    """محرك فحص متعدد السيرفرات لأشهر مزودات TMDB العالمية مع كاش فائق السرعة[span_10](start_span)[span_10](end_span)."""
+    """محرك فحص متعدد السيرفرات لأشهر مزودات TMDB العالمية مع كاش فائق السرعة."""
     cache_key = f"stream:global:{media_type}:{tmdb_id}:{season}:{episode}"
     if not debug:
         cached = get_cached(cache_key)
