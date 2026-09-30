@@ -1,11 +1,11 @@
 
+
 from urllib.parse import quote, unquote, urlparse
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
 import requests
 import json
 import re
-import base64
 
 # استيراد محرك التخفي وانتحال بصمة TLS/JA3 مع Fallback لمكتبة requests
 try:
@@ -58,7 +58,7 @@ def set_cached(key, data, ttl=CACHE_TTL_SECONDS):
         payload = ["SET", key, json.dumps(data), "EX", ttl]
         requests.post(UPSTASH_REDIS_REST_URL, json=payload, headers=headers, timeout=3)
     except Exception as e:
-        print(f"⚠️️ Upstash Redis SET Error: {e}")
+        print(f"⚠️ Upstash Redis SET Error: {e}")
 
 
 TMDB_HEADERS = {
@@ -87,52 +87,35 @@ def clean_query_term(text):
 
 
 # ==============================================================================
-# 🥷 التقنية 2: محرك انتحال بصمة المتصفح (TLS / JA3 Spoofing with Safe Fallback)
+# 🥷 التقنية 2: محرك انتحال بصمة المتصفح (TLS / JA3 Spoofing)
 # ==============================================================================
 
-def stealth_fetch(url, referer=None, is_ajax=False, method='GET', data=None, json_data=None):
-    """طلب فائق التخفي يطابق بصمة Google Chrome 124 مع دعم كامل لطلبات GET و POST."""
+def stealth_fetch(url, referer=None):
+    """طلب فائق التخفي يطابق بصمة Google Chrome 124 الثنائية لتجاوز جدران الحماية."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/javascript, */*; q=0.01" if is_ajax else "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "ar,en-US;q=0.9,en;q=0.8",
         "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
         "Sec-Ch-Ua-Mobile": "?0",
         "Sec-Ch-Ua-Platform": '"Windows"',
-        "Sec-Fetch-Dest": "empty" if is_ajax else "document",
-        "Sec-Fetch-Mode": "cors" if is_ajax else "navigate",
-        "Sec-Fetch-Site": "same-origin" if is_ajax else "none",
-        "Sec-Fetch-User": "?1"
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1"
     }
-    if is_ajax:
-        headers["X-Requested-With"] = "XMLHttpRequest"
     if referer:
         headers["Referer"] = referer
 
     if HAS_CURL_CFFI:
-        try:
-            if method.upper() == 'POST':
-                return stealth_requests.post(
-                    url,
-                    headers=headers,
-                    data=data,
-                    json=json_data,
-                    impersonate="chrome124",
-                    timeout=8,
-                    allow_redirects=True
-                )
-            return stealth_requests.get(
-                url,
-                headers=headers,
-                impersonate="chrome124",
-                timeout=8,
-                allow_redirects=True
-            )
-        except Exception:
-            pass
-
-    if method.upper() == 'POST':
-        return requests.post(url, headers=headers, data=data, json=json_data, timeout=8, allow_redirects=True)
+        return stealth_requests.get(
+            url,
+            headers=headers,
+            impersonate="chrome124",
+            timeout=8,
+            allow_redirects=True
+        )
     return requests.get(url, headers=headers, timeout=8, allow_redirects=True)
 
 
@@ -324,18 +307,6 @@ def get_config():
         'version': '13.1.0-ServerControl',
         'providers': [
             {
-                # المزود السحابي العالمي المباشر السريع (FAST-PATH REST API)
-                'name': 'global-rest',
-                'domain': 'https://mytimat-api-bot.vercel.app',
-                'search_path': '/api/stream?tmdb={tmdb_id}&type={type}&season={season}&episode={episode}',
-                'card_selector': 'a',
-                'movie_selector': 'a',
-                'series_selector': 'a',
-                'iframe_selector': 'iframe',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-                'tmdb_mode': True,
-            },
-            {
                 'name': 'akwam',
                 'domain': AKWAM_BASE_DOMAIN,
                 'search_path': '/search?q={query}',
@@ -349,6 +320,7 @@ def get_config():
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
                 'requires_unpack': False,
                 'active_headers': akwam_headers,
+                # v13.1: Server-controllable extraction fields
                 'card_url_selector': 'a[href]',
                 'card_title_selector': 'img[alt]',
                 'card_poster_selector': 'img',
@@ -379,6 +351,7 @@ def get_config():
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'requires_unpack': True,
                 'active_headers': larroza_headers,
+                # v13.1: Server-controllable extraction fields
                 'card_url_selector': 'a[href]',
                 'card_title_selector': 'img[alt]',
                 'card_poster_selector': 'img',
@@ -399,6 +372,12 @@ def get_config():
                 """
             },
             {
+                # v12.3: Moviz-Time re-enabled with requires_webview=true.
+                # FirePlayer JS generates the stream URL at runtime via vhash.
+                # We load the iframe page in a hidden WebView, let FirePlayer
+                # + JWPlayer initialize naturally, and intercept the actual
+                # m3u8 URL via shouldInterceptRequest. This is the universal
+                # approach for ANY JS-driven player framework.
                 'name': 'moviz-time',
                 'domain': 'https://moviz-time.cfd',
                 'search_path': '/?s={query}',
@@ -407,7 +386,7 @@ def get_config():
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
                 'requires_unpack': False,
                 'ajax_required': False,
-                'requires_webview': True,
+                'requires_webview': True,  # ← v12.3: uses JsStreamExtractor
                 'series_selector': 'article.pinbox a[href]',
                 'active_headers': moviz_headers,
                 'extractor_script': r"""
@@ -433,11 +412,13 @@ def get_config():
                 'card_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"], .pm-search-results a[href*="watch.php"]',
                 'movie_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"]',
                 'series_selector': 'a[href*="series.php"], a[href*="watch.php"]',
+                # v13.1: Server-controllable extraction fields
                 'card_url_selector': 'a[href]',
                 'card_title_selector': 'h3.caption, img[alt]',
                 'card_poster_selector': 'img',
                 'card_poster_attr': 'data-echo',
                 'match_threshold': 0.55,
+                # v12.2.7: QFilm iframe_selector updated to include option[value]
                 'iframe_selector': 'iframe, option[value]',
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'ajax_required': True,
@@ -621,6 +602,11 @@ def get_home():
         except Exception as e:
             print(f"⚠️ KDrama Error: {e}")
 
+        # v12.1 (Phase 1 — Tiered Architecture): Akwam fallback removed.
+        # If TMDB returns empty trending lists (timeout/rate-limit),
+        # the server simply returns empty sections — the Android app
+        # handles empty data gracefully (no Akwam scraping on server).
+
         sections_list = [
             {
                 'key': 'trending_movies',
@@ -692,12 +678,25 @@ def get_home():
 
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
-    cat_type = request.args.get('type', 'movies').lower()
+    """v12.1 (Phase 1 — Tiered Architecture): Catalog now comes from TMDB
+    Discover instead of scraping Akwam. The Android app code is unchanged
+    because the response shape is identical.
+
+    Filter mapping (legacy Akwam sections → TMDB language filter):
+      section=29 (Arabic)    → with_original_language=ar
+      section=30 (Foreign)   → no filter (any non-Arabic falls through)
+      section=31 (Indian)   → with_original_language=hi
+      section=32 (Turkish)   → with_original_language=tr
+      section=0  (All)       → no filter
+
+    Cache TTL extended to 24h (was 6h) because catalog data is stable.
+    """
+    cat_type = request.args.get('type', 'movies').lower()  # movies | series
     page = request.args.get('page', '1')
     section = request.args.get('section', '')
-    category = request.args.get('category', '')
+    category = request.args.get('category', '')  # legacy: Akwam genre ID
     year = request.args.get('year', '')
-    quality = request.args.get('quality', '')
+    quality = request.args.get('quality', '')  # ignored — TMDB has no quality filter
 
     cache_key = f'catalog:{cat_type}:{page}:{section}:{category}:{year}'
     cached = get_cached(cache_key)
@@ -706,6 +705,7 @@ def get_catalog():
 
     tmdb_type = 'movie' if cat_type == 'movies' else 'tv'
 
+    # Build TMDB Discover params
     discover_params = {
         'api_key': TMDB_API_KEY,
         'language': 'ar-SA',
@@ -714,17 +714,21 @@ def get_catalog():
         'include_adult': 'false',
     }
 
+    # Section → with_original_language
     section_lang_map = {
-        '29': 'ar',
-        '31': 'hi',
-        '32': 'tr',
+        '29': 'ar',   # عربي
+        '31': 'hi',   # هندي
+        '32': 'tr',   # تركي
+        # '30' (أجنبي) و '0' (الكل) → بدون فلتر لغة
     }
     if section in section_lang_map:
         discover_params['with_original_language'] = section_lang_map[section]
 
+    # Category → with_genres (TMDB genre IDs)
     if category and category.isdigit():
         discover_params['with_genres'] = category
 
+    # Year filter
     if year and year.isdigit():
         if tmdb_type == 'movie':
             discover_params['primary_release_date.gte'] = f'{year}-01-01'
@@ -744,10 +748,11 @@ def get_catalog():
         total_pages = data.get('total_pages', 1)
         current_page = data.get('page', int(page))
 
+        # Build items with the same shape as /api/home and the old Akwam parser
         items = []
         for r in results:
             if not r.get('poster_path'):
-                continue
+                continue  # skip items without posters
             title = r.get('title') or r.get('name') or r.get('original_title') or 'غير متوفر'
             orig_title = r.get('original_title') or r.get('original_name') or ''
             date_field = r.get('release_date') or r.get('first_air_date') or ''
@@ -783,6 +788,7 @@ def get_catalog():
             },
         }
 
+        # v12.1: 24h cache for catalog (longer than 6h default — catalog is stable)
         set_cached(cache_key, result, ttl=24 * 3600)
         return jsonify(result)
 
@@ -868,6 +874,7 @@ def get_series_details():
     selected_season = request.args.get('season', '1').strip()
     target_year = request.args.get('year', '').strip()
 
+    # استخراج TMDB ID أولاً لضمان الاعتماد على قاعدة البيانات العالمية
     clean_tmdb_id = resolve_tmdb_tv_id(tmdb_id or series_url, title=title, orig_title=orig_title)
 
     cache_key = f'series:v3:{clean_tmdb_id or series_url}:{selected_season}'
@@ -875,6 +882,9 @@ def get_series_details():
     if cached is not None:
         return jsonify(cached)
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # المسار الأساسي 1: بناء بنية المسلسل كاملة عبر TMDB (يمنع أي Mismatch)
+    # ══════════════════════════════════════════════════════════════════════════
     if clean_tmdb_id:
         try:
             tmdb_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}?api_key={TMDB_API_KEY}&language=ar-SA&append_to_response=credits,similar'
@@ -886,6 +896,7 @@ def get_series_details():
                 tv_orig_title = res_tv.get('original_name') or orig_title or tv_title
                 overview = res_tv.get('overview', '')
 
+                # طاقم التمثيل بالصور الحقيقية
                 cast = [
                     {
                         'name': c.get('name', ''),
@@ -895,6 +906,7 @@ def get_series_details():
                     for c in res_tv.get('credits', {}).get('cast', [])[:10]
                 ]
 
+                # المسلسلات المشابهة
                 similar = [
                     {
                         'id': str(s.get('id', '')),
@@ -911,6 +923,7 @@ def get_series_details():
                     if s.get('poster_path')
                 ]
 
+                # قائمة المواسم
                 seasons = []
                 for s in res_tv.get('seasons', []):
                     s_num = s.get('season_number', 0)
@@ -925,6 +938,7 @@ def get_series_details():
                 ep_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}/season/{season_num}?api_key={TMDB_API_KEY}&language=ar-SA'
                 res_ep = requests.get(ep_url, headers=TMDB_HEADERS, timeout=4).json()
 
+                # صياغة استعلامات بحث ذكية وموحدة للحلقات
                 episodes = []
                 clean_base_title = clean_query_term(tv_title)
                 clean_base_orig = clean_query_term(tv_orig_title)
@@ -955,6 +969,10 @@ def get_series_details():
         except Exception as tmdb_err:
             print(f'⚠️ TMDB Primary Architecture Error: {tmdb_err}')
 
+    # v12.1 (Phase 1 — Tiered Architecture): Akwam fallback removed.
+    # When TMDB can't resolve the show, the server returns empty episodes.
+    # The Android app detects this and scrapes Akwam locally on the user's
+    # device via GenericScraper.scrapeSeriesFallback().
     return jsonify({
         'status': 'success',
         'data': {
@@ -1089,323 +1107,6 @@ def handle_page_cache():
             return jsonify({'status': 'success', 'message': 'Cached successfully'})
 
         return jsonify({'status': 'error', 'message': 'Invalid payload'}), 400
-
-
-# ==============================================================================
-# 9. محرك فك تشفير VidSrc الداخلي واستخراج الـ Streams عالمياً
-# ==============================================================================
-
-def unpack_all_dean_edwards(html_content):
-    """البحث عن كافة أكواد Dean Edwards المشفرة في الصفحة وفك تشفيرها ودمجها[span_0](start_span)[span_0](end_span)."""
-    pattern = r"\}\s*\(\s*['\"](.*?)['\"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['\"](.*?)['\"]\.split\(\s*['\"]\|['\"]\s*\)"
-    matches = list(re.finditer(pattern, html_content, re.DOTALL))
-    if not matches:
-        return html_content
-
-    result_text = html_content
-    for match in matches:
-        try:
-            payload, radix, count, symtab = match.groups()
-            radix = int(radix)
-            count = int(count)
-            words = symtab.split('|')
-
-            def base_n(num, b):
-                chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                if num == 0:
-                    return chars[0]
-                res = ""
-                while num > 0:
-                    res = chars[num % b] + res
-                    num //= b
-                return res
-
-            for i in range(count - 1, -1, -1):
-                key = base_n(i, radix)
-                if i < len(words) and words[i]:
-                    payload = re.sub(r'\b' + re.escape(key) + r'\b', words[i], payload)
-            result_text += "\n" + payload
-        except Exception:
-            continue
-
-    return result_text
-
-
-def extract_stream_from_html_content(content):
-    """البحث الدقيق عن روابط m3u8 أو mp4 داخل نصوص HTML أو JS مفكوكة التشفير."""
-    # 1. البحث المباشر عن امتداد m3u8
-    m3u8_matches = re.findall(r'https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*', content)
-    for sm in m3u8_matches:
-        if not any(x in sm for x in ["preview", "index", ".js"]):
-            return sm
-
-    # 2. البحث عن الروابط المعرفة كـ JSON (مثل file: "..." أو source: "...")
-    json_sources = re.findall(r'["\'](?:file|source|url|hls)["\']\s*:\s*["\'](https?://[^\s"\']+)["\']', content)
-    for cand in json_sources:
-        cand = cand.replace('\\/', '/')
-        if "m3u8" in cand or "mp4" in cand:
-            return cand
-
-    # 3. البحث عن mp4 صريح
-    mp4_matches = re.findall(r'https?://[^\s"\'<>]+\.mp4[^\s"\'<>]*', content)
-    for sm in mp4_matches:
-        if not any(x in sm for x in ["preview", "index", ".js"]):
-            return sm
-
-    return None
-
-
-def resolve_vidsrc_buzz_internal(content, base_url, soup, debug_logs):
-    """
-    استخراج المشغل الفعلي من مسار swish التابع لـ vidsrc.buzz وفك تشفير
-    سيرفر 2vcdn.skin أو مشغلات player.php الداخلية للحصول على m3u8 النهائي[span_1](start_span)[span_1](end_span).
-    """
-    try:
-        # 1. استخراج كائن Q
-        q_match = re.search(r'var\s+Q\s*=\s*({.*?});\s*(?:var|</script>)', content, re.DOTALL)
-        q_data = {}
-        if q_match:
-            try:
-                q_data = json.loads(q_match.group(1))
-            except Exception:
-                pass
-
-        if not q_data:
-            start_q = content.find("var Q = {")
-            if start_q != -1:
-                braces = 0
-                end_q = -1
-                for idx in range(start_q + 8, len(content)):
-                    if content[idx] == '{':
-                        braces += 1
-                    elif content[idx] == '}':
-                        braces -= 1
-                        if braces == 0:
-                            end_q = idx + 1
-                            break
-                if end_q != -1:
-                    try:
-                        q_data = json.loads(content[start_q + 8:end_q])
-                    except Exception:
-                        pass
-
-        parsed_b = urlparse(base_url)
-        origin = f"{parsed_b.scheme}://{parsed_b.netloc}"
-
-        # 2. المسار الذهبي الأول: مشغل playerswish.php وسيرفر 2vcdn.skin
-        swish_path = q_data.get('swish', '')
-        if swish_path:
-            swish_url = f"{origin}{swish_path}" if swish_path.startswith('/') else swish_path
-            debug_logs.append(f"Visiting Swish Player: {swish_url}")
-            res_swish = stealth_fetch(swish_url, referer=base_url)
-            debug_logs.append(f"Swish Status: {res_swish.status_code} | Len: {len(res_swish.text or '')}")
-
-            if res_swish.status_code == 200 and res_swish.text:
-                soup_swish = BeautifulSoup(res_swish.text, 'html.parser')
-                for ifr in soup_swish.find_all('iframe'):
-                    src = ifr.get('src') or ifr.get('data-src') or ''
-                    if src and src.startswith(('http', '//')):
-                        if src.startswith('//'):
-                            src = 'https:' + src
-                        debug_logs.append(f"Visiting 2vcdn Host: {src}")
-                        res_host = stealth_fetch(src, referer=swish_url)
-                        debug_logs.append(f"Host Status: {res_host.status_code} | Len: {len(res_host.text or '')}")
-
-                        if res_host.status_code == 200 and res_host.text:
-                            # فك تشفير Dean Edwards بالكامل لكشف مصفوفة sources و file
-                            unpacked_host = unpack_all_dean_edwards(res_host.text)
-                            stream_found = extract_stream_from_html_content(unpacked_host)
-                            if stream_found:
-                                debug_logs.append(f"Found Stream via 2vcdn Host: {stream_found}")
-                                return stream_found
-
-                            # فحص أي iframe إضافي داخل صفحة الهوست
-                            soup_host = BeautifulSoup(res_host.text, 'html.parser')
-                            for ifr2 in soup_host.find_all('iframe'):
-                                src2 = ifr2.get('src') or ''
-                                if src2.startswith(('http', '//')):
-                                    if src2.startswith('//'):
-                                        src2 = 'https:' + src2
-                                    debug_logs.append(f"Visiting 2vcdn Sub-Iframe: {src2}")
-                                    res_sub = stealth_fetch(src2, referer=src)
-                                    if res_sub.status_code == 200 and res_sub.text:
-                                        unp_sub = unpack_all_dean_edwards(res_sub.text)
-                                        sub_st = extract_stream_from_html_content(unp_sub)
-                                        if sub_st:
-                                            debug_logs.append(f"Found Stream via Sub-Host: {sub_st}")
-                                            return sub_st
-
-        # 3. المسار الذهبي الثاني: مشغلات player.php (100KB HTML)
-        servers = q_data.get('ssr', {}).get('servers', [])
-        for srv in servers[:3]:
-            s_k = srv.get('k')
-            if s_k:
-                pl_url = f"{origin}/pl/player.php?k={s_k}"
-                debug_logs.append(f"Visiting PL Player: {pl_url}")
-                res_pl = stealth_fetch(pl_url, referer=base_url)
-                debug_logs.append(f"PL Status: {res_pl.status_code} | Len: {len(res_pl.text or '')}")
-
-                if res_pl.status_code == 200 and res_pl.text:
-                    unpacked_pl = unpack_all_dean_edwards(res_pl.text)
-                    st_pl = extract_stream_from_html_content(unpacked_pl)
-                    if st_pl:
-                        debug_logs.append(f"Found Stream via PL: {st_pl}")
-                        return st_pl
-
-                    # فحص iframes داخل player.php
-                    soup_pl = BeautifulSoup(res_pl.text, 'html.parser')
-                    for ifr_pl in soup_pl.find_all('iframe'):
-                        src_pl = ifr_pl.get('src') or ifr_pl.get('data-src') or ''
-                        if src_pl and src_pl.startswith(('http', '//')):
-                            if src_pl.startswith('//'):
-                                src_pl = 'https:' + src_pl
-                            debug_logs.append(f"Visiting PL Inner Iframe: {src_pl}")
-                            res_pl_in = stealth_fetch(src_pl, referer=pl_url)
-                            if res_pl_in.status_code == 200 and res_pl_in.text:
-                                unp_pl_in = unpack_all_dean_edwards(res_pl_in.text)
-                                st_in = extract_stream_from_html_content(unp_pl_in)
-                                if st_in:
-                                    debug_logs.append(f"Found Stream via PL Inner: {st_in}")
-                                    return st_in
-
-    except Exception as e:
-        debug_logs.append(f"VidSrc Buzz Resolver Error: {str(e)}")
-
-    return None
-
-
-def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None):
-    """دالة تتبع متقدمة للغوص داخل الـ iframes والسكربتات واستخراج روابط HLS المباشرة[span_2](start_span)[span_2](end_span)."""
-    if debug_logs is None:
-        debug_logs = []
-
-    try:
-        debug_logs.append(f"Visiting [depth {depth}]: {target_url}")
-        res = stealth_fetch(target_url, referer=referer)
-        debug_logs.append(f"Status: {res.status_code} | Len: {len(res.text or '')}")
-
-        if res.status_code != 200 or not res.text:
-            return None
-
-        content = res.text
-        soup = BeautifulSoup(content, 'html.parser')
-        page_title = soup.title.string.strip() if soup.title and soup.title.string else 'No Title'
-        debug_logs.append(f"Title: {page_title[:60]}")
-
-        # 1. إذا كنا داخل مشغل vidsrc.buzz، نستخدم مفكك الشفرة المتخصص
-        if "vidsrc.buzz" in target_url or "var Q" in content:
-            direct_stream = resolve_vidsrc_buzz_internal(content, target_url, soup, debug_logs)
-            if direct_stream:
-                return direct_stream
-
-        # 2. البحث الصريح عن روابط m3u8 أو mp4 في النص الخام
-        stream_found = extract_stream_from_html_content(content)
-        if stream_found:
-            debug_logs.append(f"Found Stream: {stream_found}")
-            return stream_found
-
-        # 3. فحص الـ iframes
-        if depth > 0:
-            iframes = soup.find_all('iframe')
-            debug_logs.append(f"Found {len(iframes)} iframes in depth {depth}")
-
-            for ifr in iframes:
-                raw_src = ifr.get('src') or ''
-                if not raw_src or raw_src.strip() in ['about:blank', 'javascript:void(0)', '#']:
-                    raw_src = ifr.get('data-src') or ifr.get('data-url') or ifr.get('data-lazy-src') or ''
-
-                if not raw_src or not raw_src.startswith(('http://', 'https://', '//', '/')):
-                    continue
-
-                if raw_src.startswith('//'):
-                    raw_src = 'https:' + raw_src
-                elif raw_src.startswith('/'):
-                    parsed = urlparse(target_url)
-                    raw_src = f"{parsed.scheme}://{parsed.netloc}{raw_src}"
-
-                if any(x in raw_src for x in ['google', 'facebook', 'recaptcha', 'turnstile', 'doubleclick']):
-                    continue
-
-                found = extract_stream_from_page(raw_src, referer=target_url, depth=depth-1, debug_logs=debug_logs)
-                if found:
-                    return found
-    except Exception as e:
-        debug_logs.append(f"Extract error on {target_url}: {str(e)}")
-
-    return None
-
-
-def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1', debug=False):
-    """محرك فحص متعدد السيرفرات لأشهر مزودات TMDB العالمية مع كاش فائق السرعة[span_3](start_span)[span_3](end_span)."""
-    cache_key = f"stream:global:{media_type}:{tmdb_id}:{season}:{episode}"
-    if not debug:
-        cached = get_cached(cache_key)
-        if cached:
-            return cached, []
-
-    stream_results = []
-    debug_logs = []
-
-    # قائمة المزودات العالمية النشطة
-    sources = [
-        {
-            "name": "VidSrc-Buzz-Direct",
-            "url": f"https://vidsrc.buzz/embed/movie/{tmdb_id}" if media_type == 'movie' else f"https://vidsrc.buzz/embed/tv/{tmdb_id}/{season}/{episode}",
-            "referer": "https://vidsrc.buzz/"
-        },
-        {
-            "name": "2Embed-VidSrc",
-            "url": f"https://www.2embed.cc/embed/{tmdb_id}" if media_type == 'movie' else f"https://www.2embed.cc/embedtv/{tmdb_id}&s={season}&e={episode}",
-            "referer": "https://www.2embed.cc/"
-        }
-    ]
-
-    for src in sources:
-        try:
-            debug_logs.append(f"Testing Source: {src['name']}")
-            stream_url = extract_stream_from_page(src["url"], referer=src["referer"], depth=2, debug_logs=debug_logs)
-            if stream_url:
-                stream_results.append({
-                    "url": stream_url,
-                    "quality": 1080,
-                    "referer": src["referer"],
-                    "source": f"{src['name']}-Fast"
-                })
-                break
-        except Exception as e:
-            debug_logs.append(f"{src['name']} Fatal Error: {str(e)}")
-
-    if stream_results and not debug:
-        set_cached(cache_key, stream_results, ttl=2 * 3600)
-
-    return stream_results, debug_logs
-
-
-@app.route('/api/stream', methods=['GET'])
-def get_stream_api():
-    """
-    واجهة الـ REST API التي يستدعيها تطبيق SilinaTV Pro مباشرة عبر:
-    GenericScraper.scrapeSpaRestApi() في أقل من 300ms[span_4](start_span)[span_4](end_span).
-    """
-    tmdb_id = request.args.get('tmdb', '').strip()
-    media_type = request.args.get('type', 'movie').strip().lower()
-    season = request.args.get('season', '1').strip()
-    episode = request.args.get('episode', '1').strip()
-    debug = request.args.get('debug', '0') == '1'
-
-    if not tmdb_id:
-        return jsonify({'status': 'error', 'message': 'Missing tmdb parameter', 'links': []}), 400
-
-    links, debug_logs = resolve_global_stream(tmdb_id, media_type, season, episode, debug=debug)
-
-    response = {
-        'status': 'success',
-        'links': links
-    }
-    if debug:
-        response['debug_logs'] = debug_logs
-
-    return jsonify(response)
 
 
 if __name__ == '__main__':
