@@ -312,15 +312,18 @@ def get_config():
     
 
     
-    'name': 'multiembed',
-    'domain': 'https://multiembed.mov',
-    'search_path': '/?video_id={tmdb_id}&tmdb=1',
+
+    'name': 'embedsu',
+    'domain': 'https://embed.su',
+    'search_path': '/embed/movie/{tmdb_id}',
     'card_selector': 'a',
     'movie_selector': 'a',
     'series_selector': 'a',
     'iframe_selector': 'iframe',
     'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
     'tmdb_mode': True,
+
+
 
 
 
