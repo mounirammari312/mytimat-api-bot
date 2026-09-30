@@ -86,15 +86,15 @@ def clean_query_term(text):
 
 
 # ==============================================================================
-# 🥷 التقنية 2: محرك انتحال بصمة المتصفح (TLS / JA3 Spoofing)
+# 🥷 التقنية 2: محرك انتحال بصمة المتصفح (TLS / JA3 Spoofing with Safe Fallback)
 # ==============================================================================
 
 def stealth_fetch(url, referer=None):
-    """طلب فائق التخفي يطابق بصمة Google Chrome 124 الثنائية لتجاوز جدران الحماية."""
+    """طلب فائق التخفي يطابق بصمة Google Chrome 124 مع Fallback آمن لمكتبة requests عند فشل TLS."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "ar,en-US;q=0.9,en;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
         "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
         "Sec-Ch-Ua-Mobile": "?0",
         "Sec-Ch-Ua-Platform": '"Windows"',
@@ -108,13 +108,17 @@ def stealth_fetch(url, referer=None):
         headers["Referer"] = referer
 
     if HAS_CURL_CFFI:
-        return stealth_requests.get(
-            url,
-            headers=headers,
-            impersonate="chrome124",
-            timeout=8,
-            allow_redirects=True
-        )
+        try:
+            return stealth_requests.get(
+                url,
+                headers=headers,
+                impersonate="chrome124",
+                timeout=8,
+                allow_redirects=True
+            )
+        except Exception:
+            pass  # في حالة فشل مصافحة BoringSSL ننتقل للطلب القياسي مباشرة
+
     return requests.get(url, headers=headers, timeout=8, allow_redirects=True)
 
 
@@ -204,7 +208,7 @@ def resolve_tmdb_tv_id(candidate_id, title=None, orig_title=None):
                 if results:
                     return str(results[0].get('id'))
         except Exception as e:
-            print(f"⚠️ Search TMDB TV ID Error for '{q}': {e}")
+            print(f"⚠️️ Search TMDB TV ID Error for '{q}': {e}")
     return None
 
 
@@ -1074,10 +1078,54 @@ def handle_page_cache():
 
 
 # ==============================================================================
-# 9. مسار البث العالمي السريع (Fast-Path TMDB REST API)
+# 9. مسار البث العالمي السريع المتعدد (Multi-Provider Fast-Path REST API)
 # ==============================================================================
 
+def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None):
+    """دالة تتبع متقدمة للغوص داخل الـ iframes واستخراج روابط HLS المباشرة."""
+    if debug_logs is None:
+        debug_logs = []
+
+    try:
+        debug_logs.append(f"Visiting [depth {depth}]: {target_url}")
+        res = stealth_fetch(target_url, referer=referer)
+        debug_logs.append(f"Status: {res.status_code}")
+
+        if res.status_code != 200 or not res.text:
+            return None
+
+        # 1. البحث عن روابط البث الصريحة في الصفحة
+        matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res.text)
+        for m in matches:
+            if "preview" not in m and "index" not in m and "sample" not in m:
+                debug_logs.append(f"Found Stream: {m}")
+                return m
+
+        # 2. إذا لم نعثر عليها وكان هناك عمق متبقٍ، نبحث عن iframes ونغوص بداخلها
+        if depth > 0:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            iframes = soup.find_all('iframe')
+            for ifr in iframes:
+                src = ifr.get('src') or ifr.get('data-src')
+                if src:
+                    if src.startswith('//'):
+                        src = 'https:' + src
+                    elif src.startswith('/'):
+                        parsed = urlparse(target_url)
+                        src = f"{parsed.scheme}://{parsed.netloc}{src}"
+                    
+                    if "google" not in src and "facebook" not in src and "recaptcha" not in src:
+                        found = extract_stream_from_page(src, referer=target_url, depth=depth-1, debug_logs=debug_logs)
+                        if found:
+                            return found
+    except Exception as e:
+        debug_logs.append(f"Extract error on {target_url}: {str(e)}")
+
+    return None
+
+
 def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1', debug=False):
+    """محرك فحص متعدد السيرفرات لأشهر مزودات TMDB العالمية مع كاش فائق السرعة."""
     cache_key = f"stream:global:{media_type}:{tmdb_id}:{season}:{episode}"
     if not debug:
         cached = get_cached(cache_key)
@@ -1087,74 +1135,44 @@ def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1', 
     stream_results = []
     debug_logs = []
 
-    # 1. المصدر الأول: VidSrc / 2Embed
-    try:
-        if media_type == 'movie':
-            target_url = f"https://vidsrc.net/embed/movie/{tmdb_id}"
-        else:
-            target_url = f"https://vidsrc.net/embed/tv/{tmdb_id}/{season}/{episode}"
+    # قائمة بأقوى 4 مزودات عالمية تدعم استخراج الـ Embed مباشرة
+    sources = [
+        {
+            "name": "AutoEmbed",
+            "url": f"https://autoembed.cc/embed/movie/{tmdb_id}" if media_type == 'movie' else f"https://autoembed.cc/embed/tv/{tmdb_id}/{season}/{episode}",
+            "referer": "https://autoembed.cc/"
+        },
+        {
+            "name": "VidSrc-XYZ",
+            "url": f"https://vidsrc.xyz/embed/movie/{tmdb_id}" if media_type == 'movie' else f"https://vidsrc.xyz/embed/tv/{tmdb_id}/{season}/{episode}",
+            "referer": "https://vidsrc.xyz/"
+        },
+        {
+            "name": "2Embed",
+            "url": f"https://www.2embed.cc/embed/{tmdb_id}" if media_type == 'movie' else f"https://www.2embed.cc/embedtv/{tmdb_id}&s={season}&e={episode}",
+            "referer": "https://www.2embed.cc/"
+        },
+        {
+            "name": "SmashyStream",
+            "url": f"https://embed.smashystream.com/playere.php?tmdb={tmdb_id}" if media_type == 'movie' else f"https://embed.smashystream.com/playere.php?tmdb={tmdb_id}&season={season}&episode={episode}",
+            "referer": "https://embed.smashystream.com/"
+        }
+    ]
 
-        debug_logs.append(f"Fetching: {target_url}")
-        res = stealth_fetch(target_url, referer="https://vidsrc.net/")
-        debug_logs.append(f"Status: {res.status_code}")
-
-        if res.status_code == 200:
-            matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res.text)
-            
-            if not matches:
-                soup = BeautifulSoup(res.text, 'html.parser')
-                iframe = soup.find('iframe')
-                if iframe and iframe.get('src'):
-                    iframe_url = iframe['src']
-                    if iframe_url.startswith('//'):
-                        iframe_url = 'https:' + iframe_url
-                    debug_logs.append(f"Found Iframe: {iframe_url}")
-                    
-                    res_iframe = stealth_fetch(iframe_url, referer=target_url)
-                    matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_iframe.text)
-
-            for m in matches:
-                if "preview" not in m and "index" not in m:
-                    stream_results.append({
-                        "url": m,
-                        "quality": 1080,
-                        "referer": target_url,
-                        "source": "VidSrc-Fast"
-                    })
-                    break
-    except Exception as e:
-        debug_logs.append(f"VidSrc Error: {str(e)}")
-
-    # 2. المصدر الثاني الاحتياطي: AutoEmbed
-    if not stream_results:
+    for src in sources:
         try:
-            if media_type == 'movie':
-                auto_url = f"https://player.autoembed.cc/embed/movie/{tmdb_id}"
-            else:
-                auto_url = f"https://player.autoembed.cc/embed/tv/{tmdb_id}/{season}/{episode}"
-
-            debug_logs.append(f"Trying AutoEmbed: {auto_url}")
-            res_auto = stealth_fetch(auto_url, referer="https://player.autoembed.cc/")
-            if res_auto.status_code == 200:
-                soup = BeautifulSoup(res_auto.text, 'html.parser')
-                iframe = soup.find('iframe')
-                if iframe and iframe.get('src'):
-                    iframe_url = iframe['src']
-                    if iframe_url.startswith('//'):
-                        iframe_url = 'https:' + iframe_url
-                    res_ifr = stealth_fetch(iframe_url, referer=auto_url)
-                    matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_ifr.text)
-                    for m in matches:
-                        if "index" not in m:
-                            stream_results.append({
-                                "url": m,
-                                "quality": 1080,
-                                "referer": auto_url,
-                                "source": "AutoEmbed-Fast"
-                            })
-                            break
+            debug_logs.append(f"Testing Source: {src['name']}")
+            stream_url = extract_stream_from_page(src["url"], referer=src["referer"], depth=2, debug_logs=debug_logs)
+            if stream_url:
+                stream_results.append({
+                    "url": stream_url,
+                    "quality": 1080,
+                    "referer": src["referer"],
+                    "source": f"{src['name']}-Fast"
+                })
+                break  # العثور على أول رابط صالح يكفي لتسليمه للمشغل فوراً
         except Exception as e:
-            debug_logs.append(f"AutoEmbed Error: {str(e)}")
+            debug_logs.append(f"{src['name']} Fatal Error: {str(e)}")
 
     if stream_results and not debug:
         set_cached(cache_key, stream_results, ttl=2 * 3600)
