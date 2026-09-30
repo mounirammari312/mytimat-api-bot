@@ -117,7 +117,7 @@ def stealth_fetch(url, referer=None):
                 allow_redirects=True
             )
         except Exception:
-            pass  # في حالة فشل مصافحة BoringSSL ننتقل للطلب القياسي مباشرة
+            pass
 
     return requests.get(url, headers=headers, timeout=8, allow_redirects=True)
 
@@ -208,7 +208,7 @@ def resolve_tmdb_tv_id(candidate_id, title=None, orig_title=None):
                 if results:
                     return str(results[0].get('id'))
         except Exception as e:
-            print(f"⚠️️ Search TMDB TV ID Error for '{q}': {e}")
+            print(f"⚠️ Search TMDB TV ID Error for '{q}': {e}")
     return None
 
 
@@ -1078,8 +1078,39 @@ def handle_page_cache():
 
 
 # ==============================================================================
-# 9. مسار البث العالمي السريع المتعدد (Multi-Provider Fast-Path REST API)
+# 9. محرك فك تشفير Dean Edwards واستخراج الـ Streams عالمياً
 # ==============================================================================
+
+def unpack_dean_edwards(script_text):
+    """فك تشفير كود جافاسكريبت المشفر بـ p,a,c,k,e,d لكشف روابط الفيديو المخفية."""
+    pattern = r"\}\s*\(\s*['\"](.*?)['\"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['\"](.*?)['\"]\.split\(\s*['\"]\|['\"]\s*\)"
+    match = re.search(pattern, script_text, re.DOTALL)
+    if not match:
+        return script_text
+    try:
+        payload, radix, count, symtab = match.groups()
+        radix = int(radix)
+        count = int(count)
+        words = symtab.split('|')
+
+        def base_n(num, b):
+            chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            if num == 0:
+                return chars[0]
+            res = ""
+            while num > 0:
+                res = chars[num % b] + res
+                num //= b
+            return res
+
+        for i in range(count - 1, -1, -1):
+            key = base_n(i, radix)
+            if i < len(words) and words[i]:
+                payload = re.sub(r'\b' + re.escape(key) + r'\b', words[i], payload)
+        return payload
+    except Exception:
+        return script_text
+
 
 def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None):
     """دالة تتبع متقدمة للغوص داخل الـ iframes واستخراج روابط HLS المباشرة."""
@@ -1094,30 +1125,53 @@ def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None)
         if res.status_code != 200 or not res.text:
             return None
 
-        # 1. البحث عن روابط البث الصريحة في الصفحة
-        matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res.text)
+        # فك تشفير أي أكواد جافاسكريبت معبأة
+        content = res.text
+        if "eval(function(p,a,c,k,e,d)" in content:
+            debug_logs.append("Unpacking Dean Edwards JS...")
+            content = unpack_dean_edwards(content)
+
+        # 1. البحث المباشر عن روابط m3u8 أو mp4
+        matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', content)
         for m in matches:
             if "preview" not in m and "index" not in m and "sample" not in m:
                 debug_logs.append(f"Found Stream: {m}")
                 return m
 
-        # 2. إذا لم نعثر عليها وكان هناك عمق متبقٍ، نبحث عن iframes ونغوص بداخلها
+        # البحث عن ملفات m3u8 بدون امتداد صريح (مثل file: "..." أو source: "...")
+        json_stream = re.search(r'["\'](?:file|source|url)["\']\s*:\s*["\'](https?://[^\s"\']+)["\']', content)
+        if json_stream:
+            cand = json_stream.group(1).replace('\\/', '/')
+            if "m3u8" in cand or "mp4" in cand:
+                debug_logs.append(f"Found Config Stream: {cand}")
+                return cand
+
+        # 2. فحص iframes مع تجاوز الـ Lazy-Loading (تخطي about:blank)
         if depth > 0:
             soup = BeautifulSoup(res.text, 'html.parser')
             iframes = soup.find_all('iframe')
             for ifr in iframes:
-                src = ifr.get('src') or ifr.get('data-src')
-                if src:
-                    if src.startswith('//'):
-                        src = 'https:' + src
-                    elif src.startswith('/'):
-                        parsed = urlparse(target_url)
-                        src = f"{parsed.scheme}://{parsed.netloc}{src}"
-                    
-                    if "google" not in src and "facebook" not in src and "recaptcha" not in src:
-                        found = extract_stream_from_page(src, referer=target_url, depth=depth-1, debug_logs=debug_logs)
-                        if found:
-                            return found
+                # التقاط الرابط الحقيقي حتى لو كان مخفياً في data-src
+                raw_src = ifr.get('src') or ''
+                if not raw_src or raw_src.strip() in ['about:blank', 'javascript:void(0)', '#']:
+                    raw_src = ifr.get('data-src') or ifr.get('data-url') or ifr.get('data-lazy-src') or ''
+
+                if not raw_src or not raw_src.startswith(('http://', 'https://', '//', '/')):
+                    continue
+
+                if raw_src.startswith('//'):
+                    raw_src = 'https:' + raw_src
+                elif raw_src.startswith('/'):
+                    parsed = urlparse(target_url)
+                    raw_src = f"{parsed.scheme}://{parsed.netloc}{raw_src}"
+
+                # استبعاد الإعلانات ومحركات الحماية
+                if any(x in raw_src for x in ['google', 'facebook', 'recaptcha', 'cloudflare', 'turnstile']):
+                    continue
+
+                found = extract_stream_from_page(raw_src, referer=target_url, depth=depth-1, debug_logs=debug_logs)
+                if found:
+                    return found
     except Exception as e:
         debug_logs.append(f"Extract error on {target_url}: {str(e)}")
 
@@ -1135,18 +1189,8 @@ def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1', 
     stream_results = []
     debug_logs = []
 
-    # قائمة بأقوى 4 مزودات عالمية تدعم استخراج الـ Embed مباشرة
+    # قائمة بالمزودات العالمية النشطة والموثوقة
     sources = [
-        {
-            "name": "AutoEmbed",
-            "url": f"https://autoembed.cc/embed/movie/{tmdb_id}" if media_type == 'movie' else f"https://autoembed.cc/embed/tv/{tmdb_id}/{season}/{episode}",
-            "referer": "https://autoembed.cc/"
-        },
-        {
-            "name": "VidSrc-XYZ",
-            "url": f"https://vidsrc.xyz/embed/movie/{tmdb_id}" if media_type == 'movie' else f"https://vidsrc.xyz/embed/tv/{tmdb_id}/{season}/{episode}",
-            "referer": "https://vidsrc.xyz/"
-        },
         {
             "name": "2Embed",
             "url": f"https://www.2embed.cc/embed/{tmdb_id}" if media_type == 'movie' else f"https://www.2embed.cc/embedtv/{tmdb_id}&s={season}&e={episode}",
@@ -1156,6 +1200,16 @@ def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1', 
             "name": "SmashyStream",
             "url": f"https://embed.smashystream.com/playere.php?tmdb={tmdb_id}" if media_type == 'movie' else f"https://embed.smashystream.com/playere.php?tmdb={tmdb_id}&season={season}&episode={episode}",
             "referer": "https://embed.smashystream.com/"
+        },
+        {
+            "name": "VidSrc-PM",
+            "url": f"https://vidsrc.pm/embed/movie/{tmdb_id}" if media_type == 'movie' else f"https://vidsrc.pm/embed/tv/{tmdb_id}/{season}/{episode}",
+            "referer": "https://vidsrc.pm/"
+        },
+        {
+            "name": "VidSrc-IN",
+            "url": f"https://vidsrc.in/embed/movie/{tmdb_id}" if media_type == 'movie' else f"https://vidsrc.pm/embed/tv/{tmdb_id}/{season}/{episode}",
+            "referer": "https://vidsrc.in/"
         }
     ]
 
@@ -1170,7 +1224,7 @@ def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1', 
                     "referer": src["referer"],
                     "source": f"{src['name']}-Fast"
                 })
-                break  # العثور على أول رابط صالح يكفي لتسليمه للمشغل فوراً
+                break
         except Exception as e:
             debug_logs.append(f"{src['name']} Fatal Error: {str(e)}")
 
