@@ -306,130 +306,10 @@ def get_config():
         'version': '13.1.0-ServerControl',
         'providers': [
             {
-                'name': 'akwam',
-                'domain': AKWAM_BASE_DOMAIN,
-                'search_path': '/search?q={query}',
-                'catalog_path': '/movies?page={page}&section={section}',
-                'series_catalog_path': '/series?page={page}&section={section}',
-                'card_selector': 'div.entry-box',
-                'movie_selector': 'a[href*=/movie/]',
-                'series_selector': 'a[href*=/series/]',
-                'ep_selector': 'a[href*=/episode/]',
-                'watch_selector': 'a[href*=/watch/], a.link-btn',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
-                'requires_unpack': False,
-                'active_headers': akwam_headers,
-                'card_url_selector': 'a[href]',
-                'card_title_selector': 'img[alt]',
-                'card_poster_selector': 'img',
-                'card_poster_attr': 'data-src',
-                'match_threshold': 0.65,
-                'extractor_script': r"""
-                    (function() {
-                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:mp4)[^\s"'<>]*/i);
-                        if (match) {
-                            return {
-                                url: match[0],
-                                referer: __PAGE_URL__,
-                                quality: '1080p FHD'
-                            };
-                        }
-                        return null;
-                    })();
-                """
-            },
-            {
-                'name': 'larroza',
-                'domain': LARROZA_BASE_DOMAIN,
-                'search_path': '/search.php?keywords={query}',
-                'catalog_path': '/newvideos1.php?page={page}',
-                'series_catalog_path': '/moslslat4.php?page={page}',
-                'card_selector': 'a[href*=video.php]',
-                'iframe_selector': 'iframe',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-                'requires_unpack': True,
-                'active_headers': larroza_headers,
-                'card_url_selector': 'a[href]',
-                'card_title_selector': 'img[alt]',
-                'card_poster_selector': 'img',
-                'card_poster_attr': 'data-echo',
-                'match_threshold': 0.55,
-                'extractor_script': r"""
-                    (function() {
-                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
-                        if (match) {
-                            return {
-                                url: match[0],
-                                referer: __PAGE_URL__,
-                                quality: match[0].indexOf('.m3u8') !== -1 ? 'HLS' : '1080p'
-                            };
-                        }
-                        return null;
-                    })();
-                """
-            },
-            {
-                'name': 'moviz-time',
-                'domain': 'https://moviz-time.cfd',
-                'search_path': '/?s={query}',
-                'card_selector': 'article.pinbox .thumb a, h2.title-2 a, h3.title-2 a, article.pinbox a[href]',
-                'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link]',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
-                'requires_unpack': False,
-                'ajax_required': False,
-                'requires_webview': True,
-                'series_selector': 'article.pinbox a[href]',
-                'active_headers': moviz_headers,
-                'extractor_script': r"""
-                    (function() {
-                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4|txt)[^\s"'<>]*/i);
-                        if (match) {
-                            return {
-                                url: match[0],
-                                referer: __PAGE_URL__,
-                                quality: 'Auto'
-                            };
-                        }
-                        return null;
-                    })();
-                """
-            },
-            {
-                'name': 'qfilm',
-                'domain': 'https://a.qfilm.tv',
-                'search_path': '/search.php?keywords={query}',
-                'catalog_path': '/browse.php?page={page}',
-                'series_catalog_path': '/moslslat.php?page={page}',
-                'card_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"], .pm-search-results a[href*="watch.php"]',
-                'movie_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"]',
-                'series_selector': 'a[href*="series.php"], a[href*="watch.php"]',
-                'card_url_selector': 'a[href]',
-                'card_title_selector': 'h3.caption, img[alt]',
-                'card_poster_selector': 'img',
-                'card_poster_attr': 'data-echo',
-                'match_threshold': 0.55,
-                'iframe_selector': 'iframe, option[value]',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-                'ajax_required': True,
-                'requires_unpack': False,
-                'active_headers': qfilm_headers,
-                'extractor_script': r"""
-                    (function() {
-                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
-                        if (match) {
-                            return {
-                                url: match[0],
-                                referer: __PAGE_URL__,
-                                quality: 'HD'
-                            };
-                        }
-                        return null;
-                    })();
-                """
-            },
-            {
-                # المزود العالمي الإنجليزي بالصوت الأصلي والترجمات المتعددة
-                # يعمل بنفس تقنية WebView الخاصة بـ moviz-time لاعتراض روابط HLS في الهاتف
+
+
+
+            
                 'name': 'multiembed-global',
                 'domain': 'https://multiembed.mov',
                 'search_path': '/?video_id={query}&tmdb=1',
@@ -438,7 +318,7 @@ def get_config():
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'requires_unpack': False,
                 'ajax_required': False,
-                'requires_webview': True,
+                'requires_webview': True,  # التفعيل عبر هاتف المستخدم مباشرة
                 'extractor_script': r"""
                     (function() {
                         var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
@@ -446,13 +326,20 @@ def get_config():
                             return {
                                 url: match[0],
                                 referer: __PAGE_URL__,
-                                quality: 'Multi-Sub'
+                                quality: '1080p Multi'
                             };
                         }
                         return null;
                     })();
                 """
-            }
+            },
+
+
+
+
+
+
+            
         ],
     })
 
