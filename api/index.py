@@ -528,7 +528,7 @@ def get_home():
                     if t.get('poster_path')
                 ]
         except Exception as e:
-            print(f"⚠️️ Trending TV Error: {e}")
+            print(f"⚠️ Trending TV Error: {e}")
 
         try:
             top_res = requests.get(
@@ -619,7 +619,7 @@ def get_home():
                     if t.get('poster_path')
                 ]
         except Exception as e:
-            print(f"⚠️️ KDrama Error: {e}")
+            print(f"⚠️ KDrama Error: {e}")
 
         sections_list = [
             {
@@ -1096,7 +1096,7 @@ def handle_page_cache():
 # ==============================================================================
 
 def unpack_dean_edwards(script_text):
-    """فك تشفير كود جافاسكريبت المشفر بـ p,a,c,k,e,d لكشف روابط الفيديو المخفية."""
+    """فك تشفير كود جافاسكريبت المشفر بـ p,a,c,k,e,d لكشف روابط الفيديو المخفية[span_7](start_span)[span_7](end_span)."""
     pattern = r"\}\s*\(\s*['\"](.*?)['\"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['\"](.*?)['\"]\.split\(\s*['\"]\|['\"]\s*\)"
     match = re.search(pattern, script_text, re.DOTALL)
     if not match:
@@ -1128,11 +1128,11 @@ def unpack_dean_edwards(script_text):
 
 def resolve_vidsrc_buzz_internal(content, base_url, soup, debug_logs):
     """
-    استخراج السيرفرات الحقيقية عبر فحص سكربت المشغل الخارجي لـ vidsrc.buzz
-    ودعم طلبات POST و GET لاستخراج رابط الـ m3u8.
+    استخراج السيرفرات الحقيقية عبر فحص السكربتات الداخلية في vidsrc.buzz
+    واستخراج روابط الـ m3u8 أو مسارات الـ iframe المباشرة[span_8](start_span)[span_8](end_span).
     """
     try:
-        # 1. استخراج كائن Q
+        # 1. استخراج كائن Q بالكامل
         q_match = re.search(r'var\s+Q\s*=\s*({.*?});\s*(?:var|</script>)', content, re.DOTALL)
         q_data = {}
         if q_match:
@@ -1160,115 +1160,62 @@ def resolve_vidsrc_buzz_internal(content, base_url, soup, debug_logs):
                     except Exception:
                         pass
 
-        parsed_b = urlparse(base_url)
-        origin = f"{parsed_b.scheme}://{parsed_b.netloc}"
+        # 2. طباعة كافة حقول Q الهامة
+        q_inspect = {k: v for k, v in q_data.items() if k not in ['ssr', 't']}
+        debug_logs.append(f"Q Fields: {json.dumps(q_inspect)}")
 
-        # 2. فحص السكربتات الخارجية التابعة للمشغل
-        script_tags = soup.find_all('script', src=True)
-        external_scripts = []
-        for s in script_tags:
-            src = s['src']
-            if not any(x in src for x in ['google', 'recaptcha', 'turnstile', 'cloudflare', 'analytics']):
-                if src.startswith('//'):
-                    src = 'https:' + src
-                elif src.startswith('/'):
-                    src = f"{origin}{src}"
-                external_scripts.append(src)
-
-        debug_logs.append(f"External Scripts: {external_scripts[:4]}")
-
-        # فحص أول سكريبت للمشغل للبحث عن روابط الـ AJAX الفعلية
-        discovered_routes = []
-        for s_url in external_scripts[:2]:
-            debug_logs.append(f"Reading Script: {s_url}")
-            res_s = stealth_fetch(s_url, referer=base_url)
-            if res_s.status_code == 200 and res_s.text:
-                # البحث عن مسارات fetch أو ajax
-                matches_routes = re.findall(r'''['"](/(?:api|ajax|server|source|play|stream)[^'"]+)['"]''', res_s.text)
-                discovered_routes.extend(matches_routes)
-                debug_logs.append(f"Found Routes in JS: {list(dict.fromkeys(matches_routes))[:6]}")
-
-        # 3. إعداد الروابط بناءً على السيرفرات والمسارات المستكشفة
         servers = q_data.get('ssr', {}).get('servers', [])
-        test_requests = []
+        if servers:
+            debug_logs.append(f"Server 0 Complete: {json.dumps(servers[0])}")
 
-        for srv in servers:
-            s_k = srv.get('k')
-            s_ref = srv.get('ref')
+        # 3. فحص الأكواد الداخلية (Inline Scripts) التي تحوي منطق المشغل الفعلي
+        inline_scripts = soup.find_all('script', src=False)
+        debug_logs.append(f"Inline script count: {len(inline_scripts)}")
 
-            # تجربة المسارات المستكشفة من السكريبت
-            for r in list(dict.fromkeys(discovered_routes)):
-                # استبدال أي متغيرات في المسار
-                clean_r = r.replace(':id', str(s_k)).replace('{id}', str(s_k))
-                test_requests.append({'url': f"{origin}{clean_r}", 'method': 'GET'})
-                test_requests.append({'url': f"{origin}{clean_r}", 'method': 'POST', 'json': {'k': s_k, 'ref': s_ref}})
+        logic_snippets = []
+        found_urls_in_scripts = []
 
-            # إذا لم يتم اكتشاف مسارات واضحة، نجرب استدعاء الـ API المباشر مع الـ Hash
-            if s_k:
-                test_requests.extend([
-                    {'url': f"{origin}/api/source/{s_k}", 'method': 'GET'},
-                    {'url': f"{origin}/api/source/{s_k}", 'method': 'POST', 'json': {'ref': s_ref}},
-                    {'url': f"{origin}/ajax/embed/source/{s_k}", 'method': 'GET'},
-                    {'url': f"{origin}/ajax/embed/source/{s_k}", 'method': 'POST', 'data': {'hash': s_k, 'ref': s_ref}},
-                ])
+        for i, s in enumerate(inline_scripts):
+            txt = s.string or s.text or ''
+            if not txt:
+                continue
 
-        # 4. تنفيذ الطلبات واستخراج البث
-        for req_item in test_requests[:10]:
-            t_url = req_item['url']
-            m_method = req_item['method']
-            debug_logs.append(f"Calling [{m_method}]: {t_url}")
-            res_req = stealth_fetch(
-                t_url,
-                referer=base_url,
-                is_ajax=True,
-                method=m_method,
-                data=req_item.get('data'),
-                json_data=req_item.get('json')
-            )
-            debug_logs.append(f"Status: {res_req.status_code} | Len: {len(res_req.text or '')}")
+            # البحث عن الروابط والنطاقات داخل السكربت الداخلي
+            found_urls = re.findall(r'https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}[^\s"\'<>]*', txt)
+            filtered_urls = [u for u in found_urls if not any(x in u for x in ['google', 'schema.org', 'w3.org', 'tmdb'])]
+            if filtered_urls:
+                found_urls_in_scripts.extend(filtered_urls)
 
-            if res_req.status_code == 200 and res_req.text:
-                resp_text = res_req.text
-                if "eval(function(p,a,c,k,e,d)" in resp_text:
-                    resp_text = unpack_dean_edwards(resp_text)
+            # البحث عن منطق تحميل المشغل أو الـ iframe
+            if any(w in txt for w in ['servers', 'iframe', 'player', 'src', 'fetch', 'ajax', 'post', 'get']):
+                matches = re.findall(r'.{0,70}(?:servers|iframe|\.src|setAttribute|fetch|ajax).{0,70}', txt)
+                for m in matches[:3]:
+                    logic_snippets.append(' '.join(m.split()))
 
-                # فحص الروابط المباشرة
-                m3u8_list = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', resp_text)
-                for stream_candidate in m3u8_list:
-                    if not any(x in stream_candidate for x in ["preview", "index", ".js"]):
-                        debug_logs.append(f"Found Direct Stream: {stream_candidate}")
-                        return stream_candidate
+        if found_urls_in_scripts:
+            debug_logs.append(f"Discovered Script URLs: {list(dict.fromkeys(found_urls_in_scripts))[:5]}")
+        if logic_snippets:
+            debug_logs.append(f"Script Logic Snippets: {logic_snippets[:4]}")
 
-                # فحص استجابات JSON
-                try:
-                    j_obj = json.loads(resp_text)
-                    if isinstance(j_obj, dict):
-                        for k_name in ['url', 'file', 'source', 'link', 'data']:
-                            val = str(j_obj.get(k_name, ''))
-                            if val.startswith('http') and ('.m3u8' in val or '.mp4' in val):
-                                debug_logs.append(f"Found Stream in JSON: {val}")
-                                return val
-                            elif val.startswith(('http', '//')):
-                                if val.startswith('//'):
-                                    val = 'https:' + val
-                                res_v = stealth_fetch(val, referer=t_url)
-                                if res_v.status_code == 200:
-                                    sub_streams = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_v.text)
-                                    for sm in sub_streams:
-                                        if not any(x in sm for x in ["preview", "index", ".js"]):
-                                            debug_logs.append(f"Found Sub Stream: {sm}")
-                                            return sm
-                except Exception:
-                    pass
+        # 4. تجربة الروابط المكتشفة مباشرة
+        for target_cand in list(dict.fromkeys(found_urls_in_scripts)):
+            debug_logs.append(f"Testing Script URL: {target_cand}")
+            res_cand = stealth_fetch(target_cand, referer=base_url)
+            if res_cand.status_code == 200 and res_cand.text:
+                m3u8_matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_cand.text)
+                for sm in m3u8_matches:
+                    if not any(x in sm for x in ["preview", "index", ".js"]):
+                        debug_logs.append(f"Found Stream via Script URL: {sm}")
+                        return sm
 
     except Exception as e:
-        debug_logs.append(f"VidSrc Resolver Error: {str(e)}")
+        debug_logs.append(f"VidSrc Buzz Resolver Error: {str(e)}")
 
     return None
 
 
 def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None):
-    """دالة تتبع متقدمة للغوص داخل الـ iframes والسكربتات واستخراج روابط HLS المباشرة."""
+    """دالة تتبع متقدمة للغوص داخل الـ iframes والسكربتات واستخراج روابط HLS المباشرة[span_9](start_span)[span_9](end_span)."""
     if debug_logs is None:
         debug_logs = []
 
@@ -1330,7 +1277,7 @@ def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None)
 
 
 def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1', debug=False):
-    """محرك فحص متعدد السيرفرات لأشهر مزودات TMDB العالمية مع كاش فائق السرعة."""
+    """محرك فحص متعدد السيرفرات لأشهر مزودات TMDB العالمية مع كاش فائق السرعة[span_10](start_span)[span_10](end_span)."""
     cache_key = f"stream:global:{media_type}:{tmdb_id}:{season}:{episode}"
     if not debug:
         cached = get_cached(cache_key)
@@ -1379,7 +1326,7 @@ def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1', 
 def get_stream_api():
     """
     واجهة الـ REST API التي يستدعيها تطبيق SilinaTV Pro مباشرة عبر:
-    GenericScraper.scrapeSpaRestApi() في أقل من 300ms.
+    GenericScraper.scrapeSpaRestApi() في أقل من 300ms[span_11](start_span)[span_11](end_span).
     """
     tmdb_id = request.args.get('tmdb', '').strip()
     media_type = request.args.get('type', 'movie').strip().lower()
