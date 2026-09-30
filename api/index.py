@@ -1084,7 +1084,7 @@ def handle_page_cache():
 
 def unpack_dean_edwards(script_text):
     """فك تشفير كود جافاسكريبت المشفر بـ p,a,c,k,e,d لكشف روابط الفيديو المخفية."""
-    pattern = r"\}\s*\(\s*['\"](.*?)['\"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['\"](.*?)['\"]\.split\(\s*['\"]\|['\"]\s*\)"
+    pattern = r"\}\s*\(\s*['\"](.*?)['\"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['\"](.*?)['\"]\.split\(\s*['\"]\Vert{}['\"]\s*\)"
     match = re.search(pattern, script_text, re.DOTALL)
     if not match:
         return script_text
@@ -1113,108 +1113,90 @@ def unpack_dean_edwards(script_text):
         return script_text
 
 
-def try_extract_base64_stream(text):
-    """فحص نصوص Base64 واستخراج أي روابط ميديا مخفية بداخلها."""
-    b64_candidates = re.findall(r'[A-Za-z0-9+/=]{40,}', text)
-    for c in b64_candidates:
-        try:
-            decoded = base64.b64decode(c).decode('utf-8', errors='ignore')
-            if 'http' in decoded and ('.m3u8' in decoded or '.mp4' in decoded):
-                m = re.search(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', decoded)
-                if m:
-                    return m.group(0)
-        except Exception:
-            continue
-    return None
-
-
 def resolve_vidsrc_buzz_internal(content, base_url, debug_logs):
     """
-    استخراج كائن var Q المشفر من صفحة vidsrc.buzz واستدعاء مسارات RCP
-    للحصول على مشغل الفيديو والـ m3u8 النهائي.
+    استخراج كائن var Q المشفر من صفحة vidsrc.buzz والبحث داخل كائن SSR
+    عن مسارات البث والسيرفرات المجهزة مسبقاً.
     """
     try:
         # 1. استخراج كائن Q بالكامل
-        q_match = re.search(r'var\s+Q\s*=\s*({[^;]+});', content)
+        q_match = re.search(r'var\s+Q\s*=\s*({.*?});\s*(?:var|</script>)', content, re.DOTALL)
         if not q_match:
-            return None
+            start_q = content.find("var Q = {")
+            if start_q != -1:
+                # تتبع أقواس الكائن بدقة
+                braces = 0
+                end_q = -1
+                for idx in range(start_q + 8, len(content)):
+                    if content[idx] == '{':
+                        braces += 1
+                    elif content[idx] == '}':
+                        braces -= 1
+                        if braces == 0:
+                            end_q = idx + 1
+                            break
+                if end_q != -1:
+                    q_json_str = content[start_q + 8:end_q]
+                else:
+                    return None
+            else:
+                return None
+        else:
+            q_json_str = q_match.group(1)
 
-        q_json_str = q_match.group(1)
         q_data = json.loads(q_json_str)
-        token = q_data.get('t', '')
-        debug_logs.append(f"Q Token Extracted: {token[:35]}...")
+        debug_logs.append(f"Q Structure Keys: {list(q_data.keys())}")
 
-        # 2. فك توكن Base64 (فصل الجزء الأول قبل النقطة لتجنب Extra data error)
-        c_val = None
-        try:
-            jwt_payload = token.split('.')[0] if '.' in token else token
-            padded_t = jwt_payload + '=' * (-len(jwt_payload) % 4)
-            decoded_t = base64.b64decode(padded_t).decode('utf-8', errors='ignore')
-            debug_logs.append(f"Decoded Token Clean: {decoded_t[:60]}")
-            if '"c":' in decoded_t:
-                c_data = json.loads(decoded_t)
-                c_val = c_data.get('c')
-                debug_logs.append(f"RCP Key (c): {c_val}")
-        except Exception as b64_err:
-            debug_logs.append(f"Base64 parse error: {b64_err}")
+        # 2. فحص كائن SSR المحمل مسبقاً (Server-Side Rendered)
+        if 'ssr' in q_data:
+            ssr_data = q_data.get('ssr', {})
+            ssr_dump = json.dumps(ssr_data)
+            debug_logs.append(f"SSR Content: {ssr_dump[:300]}")
 
-        # 3. إعداد مسارات المشغل الداخلي
-        endpoints_to_try = []
-        if c_val:
-            endpoints_to_try.extend([
-                f"https://vidsrc.buzz/rcp/{c_val}",
-                f"https://vidsrc.buzz/prorcp/{c_val}"
-            ])
-        if token:
-            endpoints_to_try.extend([
-                f"https://vidsrc.buzz/rcp/{token}",
-                f"https://vidsrc.buzz/prorcp/{token}"
-            ])
+            # البحث عن أي روابط m3u8 أو mp4 أو iframes داخل بيانات SSR
+            ssr_streams = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', ssr_dump)
+            for s in ssr_streams:
+                if not any(x in s for x in ["preview", "index", ".js"]):
+                    debug_logs.append(f"Found Stream in SSR: {s}")
+                    return s
 
-        # فحص كود الجافاسكريبت المحيط بـ Q لاستخراج أي مسار نسبي
-        pos = content.find("var Q")
-        if pos != -1:
-            js_area = content[pos:pos+1500]
-            relative_apis = re.findall(r'''['"](/(?:rcp|prorcp|ajax|api|source)[^'"]+)['"]''', js_area)
-            for rap in relative_apis:
-                endpoints_to_try.append(f"https://vidsrc.buzz{rap}")
+            # البحث عن أي مسارات iframes داخل SSR
+            ssr_iframes = re.findall(r'https?://[^\s"\'<>]*(?:embed|player|source)[^\s"\'<>]*', ssr_dump)
+            for ifr_url in ssr_iframes:
+                debug_logs.append(f"Found SSR Inner Source: {ifr_url}")
+                res_sub = stealth_fetch(ifr_url, referer=base_url)
+                if res_sub.status_code == 200 and res_sub.text:
+                    sub_m = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_sub.text)
+                    for sm in sub_m:
+                        if not any(x in sm for x in ["preview", "index", ".js"]):
+                            debug_logs.append(f"Found Final Stream: {sm}")
+                            return sm
 
-        # 4. استدعاء مسارات RCP
-        for target in list(dict.fromkeys(endpoints_to_try)):
-            debug_logs.append(f"Calling Internal RCP: {target}")
-            res_rcp = stealth_fetch(target, referer=base_url)
-            debug_logs.append(f"RCP Status: {res_rcp.status_code} | Len: {len(res_rcp.text or '')}")
+        # 3. فحص كود الجافاسكريبت المحيط بـ Q لاستخراج مسار الـ API والـ Fetch
+        pos_q = content.find("var Q")
+        if pos_q != -1:
+            js_slice = content[pos_q:pos_q+2500]
+            # التقاط استدعاءات fetch أو AJAX
+            fetches = re.findall(r'''fetch\s*\(\s*[`'"]([^`'"]+)[`'"]''', js_slice)
+            ajax_urls = re.findall(r'''(?:url|src)\s*:\s*[`'"]([^`'"]+)[`'"]''', js_slice)
+            candidate_endpoints = list(dict.fromkeys(fetches + ajax_urls))
+            debug_logs.append(f"JS Endpoints Found: {candidate_endpoints[:5]}")
 
-            if res_rcp.status_code == 200 and res_rcp.text:
-                rcp_text = res_rcp.text
-                if "eval(function(p,a,c,k,e,d)" in rcp_text:
-                    rcp_text = unpack_dean_edwards(rcp_text)
-
-                # البحث عن رابط البث المباشر
-                m_matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', rcp_text)
-                for stream_candidate in m_matches:
-                    if not any(x in stream_candidate for x in ["preview", "index", "sample", ".js"]):
-                        debug_logs.append(f"Found Final Stream: {stream_candidate}")
-                        return stream_candidate
-
-                # فحص الـ iframes داخل رد الـ RCP
-                soup_rcp = BeautifulSoup(rcp_text, 'html.parser')
-                for ifr in soup_rcp.find_all('iframe'):
-                    src = ifr.get('src') or ifr.get('data-src') or ''
-                    if src and src.startswith(('http', '//')):
-                        if src.startswith('//'):
-                            src = 'https:' + src
-                        debug_logs.append(f"RCP Inner Iframe: {src}")
-                        res_inner = stealth_fetch(src, referer=target)
-                        if res_inner.status_code == 200:
-                            inner_matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_inner.text)
-                            for s in inner_matches:
-                                if not any(x in s for x in ["preview", "index", ".js"]):
-                                    debug_logs.append(f"Found Stream (Inner): {s}")
-                                    return s
+            for ep in candidate_endpoints:
+                if ep.startswith('/'):
+                    parsed_b = urlparse(base_url)
+                    ep = f"{parsed_b.scheme}://{parsed_b.netloc}{ep}"
+                debug_logs.append(f"Testing JS Endpoint: {ep}")
+                res_ep = stealth_fetch(ep, referer=base_url)
+                if res_ep.status_code == 200 and res_ep.text:
+                    ep_streams = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_ep.text)
+                    for es in ep_streams:
+                        if not any(x in es for x in ["preview", "index", ".js"]):
+                            debug_logs.append(f"Found Stream via Endpoint: {es}")
+                            return es
 
     except Exception as e:
-        debug_logs.append(f"vidsrc.buzz Resolver Error: {str(e)}")
+        debug_logs.append(f"SSR Resolver Error: {str(e)}")
 
     return None
 
