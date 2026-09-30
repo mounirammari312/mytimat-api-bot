@@ -5,6 +5,7 @@ from flask import Flask, jsonify, request
 import requests
 import json
 import re
+import base64
 
 # استيراد محرك التخفي وانتحال بصمة TLS/JA3 مع Fallback لمكتبة requests
 try:
@@ -605,7 +606,7 @@ def get_home():
                     if t.get('poster_path')
                 ]
         except Exception as e:
-            print(f"⚠️ KDrama Error: {e}")
+            print(f"⚠️️ KDrama Error: {e}")
 
         sections_list = [
             {
@@ -837,7 +838,7 @@ def search():
         return jsonify(result)
 
     except Exception as e:
-        print(f"⚠️️ Search Error: {e}")
+        print(f"⚠️ Search Error: {e}")
         return jsonify({'status': 'success', 'data': []})
 
 
@@ -1112,6 +1113,21 @@ def unpack_dean_edwards(script_text):
         return script_text
 
 
+def try_extract_base64_stream(text):
+    """فحص نصوص Base64 واستخراج أي روابط ميديا مخفية بداخلها."""
+    b64_candidates = re.findall(r'[A-Za-z0-9+/=]{40,}', text)
+    for c in b64_candidates:
+        try:
+            decoded = base64.b64decode(c).decode('utf-8', errors='ignore')
+            if 'http' in decoded and ('.m3u8' in decoded or '.mp4' in decoded):
+                m = re.search(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', decoded)
+                if m:
+                    return m.group(0)
+        except Exception:
+            continue
+    return None
+
+
 def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None):
     """دالة تتبع متقدمة للغوص داخل الـ iframes والسكربتات واستخراج روابط HLS المباشرة."""
     if debug_logs is None:
@@ -1130,31 +1146,59 @@ def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None)
         page_title = soup.title.string.strip() if soup.title and soup.title.string else 'No Title'
         debug_logs.append(f"Title: {page_title[:60]}")
 
-        # 1. البحث في أكواد السكربتات وفك تشفير أي سكربت معبأ
+        # 1. البحث الصريح عن روابط m3u8 أو mp4 في النص الخام
+        matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', content)
+        for m in matches:
+            if not any(x in m for x in ["preview", "index", "sample", ".js"]):
+                debug_logs.append(f"Found Stream: {m}")
+                return m
+
+        # 2. فحص وتفكيك نصوص Base64
+        b64_stream = try_extract_base64_stream(content)
+        if b64_stream:
+            debug_logs.append(f"Found Base64 Stream: {b64_stream}")
+            return b64_stream
+
+        # 3. فحص أكواد السكربتات وفك تشفير Dean Edwards
         scripts = soup.find_all('script')
         combined_text = content
+        script_hints = []
         for s in scripts:
             s_text = s.string or s.text or ''
             if "eval(function(p,a,c,k,e,d)" in s_text:
                 unpacked = unpack_dean_edwards(s_text)
                 combined_text += "\n" + unpacked
 
-        # 2. البحث الصريح عن روابط m3u8 أو mp4
-        matches = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', combined_text)
-        for m in matches:
+            # البحث عن إشارات مفيدة تفيد في التشخيص
+            if any(k in s_text for k in ['player', 'source', 'hls', 'fetch', 'ajax', 'm3u8']):
+                clean_snippet = ' '.join(s_text[:120].split())
+                if clean_snippet:
+                    script_hints.append(clean_snippet)
+
+        if script_hints:
+            debug_logs.append(f"Script Hints: {script_hints[:3]}")
+
+        # إعادة فحص الروابط بعد فك تشفير السكربتات
+        matches_unpacked = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', combined_text)
+        for m in matches_unpacked:
             if not any(x in m for x in ["preview", "index", "sample", ".js"]):
-                debug_logs.append(f"Found Stream: {m}")
+                debug_logs.append(f"Found Stream (Unpacked): {m}")
                 return m
 
-        # 3. البحث عن الروابط المعرفة كـ JSON داخل الكود (مثل file: "..." أو source: "...")
-        json_matches = re.findall(r'["\'](?:file|source|url|link)["\']\s*:\s*["\'](https?://[^\s"\']+)["\']', combined_text)
-        for cand in json_matches:
-            cand = cand.replace('\\/', '/')
-            if "m3u8" in cand or "mp4" in cand:
-                debug_logs.append(f"Found Config Stream: {cand}")
-                return cand
+        # 4. البحث عن استدعاءات API أو مسارات Ajax التابعة لـ VidSrc
+        ajax_calls = re.findall(r'["\'](/ajax/[^"\']+|/api/[^"\']+|/rcp/[^"\']+|/prorcp/[^"\']+)["\']', combined_text)
+        for ep in ajax_calls:
+            parsed = urlparse(target_url)
+            full_api = f"{parsed.scheme}://{parsed.netloc}{ep}"
+            debug_logs.append(f"Calling VidSrc API: {full_api}")
+            res_api = stealth_fetch(full_api, referer=target_url)
+            if res_api.status_code == 200:
+                api_m = re.findall(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*', res_api.text)
+                if api_m:
+                    debug_logs.append(f"Found API Stream: {api_m[0]}")
+                    return api_m[0]
 
-        # 4. فحص iframes والبحث داخلها
+        # 5. فحص الـ iframes
         if depth > 0:
             iframes = soup.find_all('iframe')
             debug_logs.append(f"Found {len(iframes)} iframes in depth {depth}")
@@ -1173,7 +1217,6 @@ def extract_stream_from_page(target_url, referer=None, depth=2, debug_logs=None)
                     parsed = urlparse(target_url)
                     raw_src = f"{parsed.scheme}://{parsed.netloc}{raw_src}"
 
-                # استبعاد الإعلانات ومحركات الحماية فقط
                 if any(x in raw_src for x in ['google', 'facebook', 'recaptcha', 'turnstile', 'doubleclick']):
                     continue
 
@@ -1197,27 +1240,22 @@ def resolve_global_stream(tmdb_id, media_type='movie', season='1', episode='1', 
     stream_results = []
     debug_logs = []
 
-    # قائمة بأقوى سيرفرات التشغيل العالمية المباشرة
+    # قائمة بالمزودات العالمية النشطة (مع التركيز على شبكة VidSrc الناجحة)
     sources = [
         {
-            "name": "SmashyStream-CF",
-            "url": f"https://embed.smashystream.com/cf.php?tmdb={tmdb_id}" if media_type == 'movie' else f"https://embed.smashystream.com/cf.php?tmdb={tmdb_id}&season={season}&episode={episode}",
-            "referer": "https://embed.smashystream.com/"
-        },
-        {
-            "name": "SmashyStream-FFalcon",
-            "url": f"https://embed.smashystream.com/ffalcon.php?tmdb={tmdb_id}" if media_type == 'movie' else f"https://embed.smashystream.com/ffalcon.php?tmdb={tmdb_id}&season={season}&episode={episode}",
-            "referer": "https://embed.smashystream.com/"
-        },
-        {
-            "name": "2Embed",
+            "name": "2Embed-VidSrc",
             "url": f"https://www.2embed.cc/embed/{tmdb_id}" if media_type == 'movie' else f"https://www.2embed.cc/embedtv/{tmdb_id}&s={season}&e={episode}",
             "referer": "https://www.2embed.cc/"
         },
         {
-            "name": "VidSrc-ICU",
-            "url": f"https://vidsrc.icu/embed/movie/{tmdb_id}" if media_type == 'movie' else f"https://vidsrc.icu/embed/tv/{tmdb_id}/{season}/{episode}",
-            "referer": "https://vidsrc.icu/"
+            "name": "VidSrc-Buzz-Direct",
+            "url": f"https://vidsrc.buzz/embed/movie/{tmdb_id}" if media_type == 'movie' else f"https://vidsrc.buzz/embed/tv/{tmdb_id}/{season}/{episode}",
+            "referer": "https://vidsrc.buzz/"
+        },
+        {
+            "name": "VidSrc-CC",
+            "url": f"https://vidsrc.cc/v2/embed/movie/{tmdb_id}" if media_type == 'movie' else f"https://vidsrc.cc/v2/embed/tv/{tmdb_id}/{season}/{episode}",
+            "referer": "https://vidsrc.cc/"
         }
     ]
 
