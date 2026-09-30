@@ -305,20 +305,21 @@ def get_config():
         'status': 'success',
         'version': '13.1.0-ServerControl',
         'providers': [
-            {
-
-
-
             
+            {
+                # المزود العالمي المباشر (TMDB Mode + WebView)
                 'name': 'multiembed-global',
                 'domain': 'https://multiembed.mov',
-                'search_path': '/?video_id={query}&tmdb=1',
+                'search_path': '/?video_id={tmdb_id}&tmdb=1',
                 'card_selector': 'iframe',
+                'movie_selector': 'iframe',
+                'series_selector': 'iframe',
                 'iframe_selector': 'iframe',
                 'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'requires_unpack': False,
                 'ajax_required': False,
-                'requires_webview': True,  # التفعيل عبر هاتف المستخدم مباشرة
+                'requires_webview': True,   # تشغيل المشغل في الـ WebView لالتقاط البث
+                'tmdb_mode': True,          # تفعيل وضع TMDB المباشر وإلغاء البحث النصي
                 'extractor_script': r"""
                     (function() {
                         var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
@@ -333,6 +334,7 @@ def get_config():
                     })();
                 """
             },
+
 
 
 
