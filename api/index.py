@@ -309,8 +309,9 @@ def get_config():
 
    {
         
-    'name': 'atlantic',
-    'domain': 'https://atlantic.st',
+    
+    'name': 'vidsrc',
+    'domain': 'https://vidsrc.to',
     'search_path': '/embed/movie/{tmdb_id}',
     'card_selector': 'a',
     'movie_selector': 'a',
@@ -318,6 +319,8 @@ def get_config():
     'iframe_selector': 'iframe',
     'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
     'tmdb_mode': True,
+
+
 
 
     },  
