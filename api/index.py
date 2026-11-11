@@ -1,5 +1,5 @@
-import os
-import time
+
+
 from urllib.parse import quote, unquote, urlparse
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
@@ -20,16 +20,15 @@ except ImportError:
 
 app = Flask(__name__)
 
-# تأمين المفاتيح عبر متغيرات البيئة في Vercel مع الإبقاء على القيم الافتراضية كاحتياط
-TMDB_API_KEY = os.environ.get('TMDB_API_KEY', '65687d1e167bc35f38ee0c88c3a37b74')
+TMDB_API_KEY = '65687d1e167bc35f38ee0c88c3a37b74'
 TMDB_BASE_URL = 'https://api.themoviedb.org/3'
 
 # ==============================================================================
 # ⚡ Upstash Redis Configuration
 # ==============================================================================
 
-UPSTASH_REDIS_REST_URL = os.environ.get('UPSTASH_REDIS_REST_URL', 'https://immortal-redfish-188577.upstash.io')
-UPSTASH_REDIS_REST_TOKEN = os.environ.get('UPSTASH_REDIS_REST_TOKEN', 'gQAAAAAAAuChAAIgcDI2MGIzYmQwZTdhYTQ0Y2MxYjFmZTU1YjU2ZGMyNGI0Mw')
+UPSTASH_REDIS_REST_URL = "https://immortal-redfish-188577.upstash.io"
+UPSTASH_REDIS_REST_TOKEN = "gQAAAAAAAuChAAIgcDI2MGIzYmQwZTdhYTQ0Y2MxYjFmZTU1YjU2ZGMyNGI0Mw"
 CACHE_TTL_SECONDS = 6 * 3600  # 6 ساعات صلاحية الكاش
 
 
@@ -318,7 +317,7 @@ def get_config():
                 'series_selector': 'a[href*=/series/]',
                 'ep_selector': 'a[href*=/episode/]',
                 'watch_selector': 'a[href*=/watch/], a.link-btn',
-                'link_regex': r'https?://[^\s"'<>]+\.(?:mp4)[^\s"'<>]*',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
                 'requires_unpack': False,
                 'active_headers': akwam_headers,
                 # v13.1: Server-controllable extraction fields
@@ -349,7 +348,7 @@ def get_config():
                 'series_catalog_path': '/moslslat4.php?page={page}',
                 'card_selector': 'a[href*=video.php]',
                 'iframe_selector': 'iframe',
-                'link_regex': r'https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'requires_unpack': True,
                 'active_headers': larroza_headers,
                 # v13.1: Server-controllable extraction fields
@@ -384,7 +383,7 @@ def get_config():
                 'search_path': '/?s={query}',
                 'card_selector': 'article.pinbox .thumb a, h2.title-2 a, h3.title-2 a, article.pinbox a[href]',
                 'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link]',
-                'link_regex': r'https?://[^\s"'<>]+\.(?:m3u8|mp4|txt)[^\s"'<>]*',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
                 'requires_unpack': False,
                 'ajax_required': False,
                 'requires_webview': True,  # ← v12.3: uses JsStreamExtractor
@@ -421,7 +420,7 @@ def get_config():
                 'match_threshold': 0.55,
                 # v12.2.7: QFilm iframe_selector updated to include option[value]
                 'iframe_selector': 'iframe, option[value]',
-                'link_regex': r'https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*',
+                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
                 'ajax_required': True,
                 'requires_unpack': False,
                 'active_headers': qfilm_headers,
@@ -1085,7 +1084,7 @@ def get_movie_details():
 
 
 # ==============================================================================
-# 8. كاش صفحات المشاهدة والروابط المشترك (v2 — يدعم Referer وتفادي 403)
+# 8. كاش صفحات المشاهدة المشترك (v2)
 # ==============================================================================
 
 @app.route('/api/page-cache', methods=['GET', 'POST'])
@@ -1095,39 +1094,17 @@ def handle_page_cache():
         if not cache_key:
             return jsonify({'status': 'error', 'message': 'Missing key'}), 400
 
-        cached_data = get_cached(f"page:v2:{cache_key}")
-        if not cached_data:
-            return jsonify({'status': 'success', 'data': None, 'url': None})
-
-        # دعم الكاش القديم (نص عادي) والحديث (كائن يحوي url و referer)
-        if isinstance(cached_data, dict):
-            return jsonify({
-                'status': 'success',
-                'url': cached_data.get('url'),
-                'referer': cached_data.get('referer'),
-                'source': cached_data.get('source'),
-                'data': cached_data
-            })
-
-        return jsonify({'status': 'success', 'url': cached_data, 'referer': None})
+        cached_url = get_cached(f"page:v2:{cache_key}")
+        return jsonify({'status': 'success', 'url': cached_url})
 
     elif request.method == 'POST':
         data = request.get_json(silent=True) or {}
         cache_key = data.get('key')
         target_url = data.get('url')
-        referer = data.get('referer')
-        source = data.get('source', 'generic')
 
         if cache_key and target_url:
-            payload = {
-                'url': target_url,
-                'referer': referer,
-                'source': source,
-                'cached_at': int(time.time())
-            }
-            # حفظ الرابط مع الترويسات لمدة 48 ساعة
-            set_cached(f"page:v2:{cache_key}", payload, ttl=48 * 3600)
-            return jsonify({'status': 'success', 'message': 'Stream payload cached successfully'})
+            set_cached(f"page:v2:{cache_key}", target_url, ttl=48 * 3600)
+            return jsonify({'status': 'success', 'message': 'Cached successfully'})
 
         return jsonify({'status': 'error', 'message': 'Invalid payload'}), 400
 
