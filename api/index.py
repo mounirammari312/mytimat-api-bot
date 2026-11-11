@@ -1,5 +1,8 @@
 
 
+
+import os
+import time
 from urllib.parse import quote, unquote, urlparse
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
@@ -20,15 +23,16 @@ except ImportError:
 
 app = Flask(__name__)
 
-TMDB_API_KEY = '65687d1e167bc35f38ee0c88c3a37b74'
+# تأمين المفاتيح عبر متغيرات البيئة في Vercel مع الإبقاء على القيم الافتراضية
+TMDB_API_KEY = os.environ.get('TMDB_API_KEY', '65687d1e167bc35f38ee0c88c3a37b74')
 TMDB_BASE_URL = 'https://api.themoviedb.org/3'
 
 # ==============================================================================
 # ⚡ Upstash Redis Configuration
 # ==============================================================================
 
-UPSTASH_REDIS_REST_URL = "https://immortal-redfish-188577.upstash.io"
-UPSTASH_REDIS_REST_TOKEN = "gQAAAAAAAuChAAIgcDI2MGIzYmQwZTdhYTQ0Y2MxYjFmZTU1YjU2ZGMyNGI0Mw"
+UPSTASH_REDIS_REST_URL = os.environ.get('UPSTASH_REDIS_REST_URL', "https://immortal-redfish-188577.upstash.io")
+UPSTASH_REDIS_REST_TOKEN = os.environ.get('UPSTASH_REDIS_REST_TOKEN', "gQAAAAAAAuChAAIgcDI2MGIzYmQwZTdhYTQ0Y2MxYjFmZTU1YjU2ZGMyNGI0Mw")
 CACHE_TTL_SECONDS = 6 * 3600  # 6 ساعات صلاحية الكاش
 
 
@@ -1094,21 +1098,42 @@ def handle_page_cache():
         if not cache_key:
             return jsonify({'status': 'error', 'message': 'Missing key'}), 400
 
-        cached_url = get_cached(f"page:v2:{cache_key}")
-        return jsonify({'status': 'success', 'url': cached_url})
+        cached_data = get_cached(f"page:v2:{cache_key}")
+        if not cached_data:
+            return jsonify({'status': 'success', 'data': None, 'url': None})
+
+        # دعم الكاش القديم (نص عادي) والحديث (كائن يحوي url و referer)
+        if isinstance(cached_data, dict):
+            return jsonify({
+                'status': 'success',
+                'url': cached_data.get('url'),
+                'referer': cached_data.get('referer'),
+                'source': cached_data.get('source'),
+                'data': cached_data
+            })
+
+        return jsonify({'status': 'success', 'url': cached_data, 'referer': None})
 
     elif request.method == 'POST':
         data = request.get_json(silent=True) or {}
         cache_key = data.get('key')
         target_url = data.get('url')
+        referer = data.get('referer')
+        source = data.get('source', 'generic')
 
         if cache_key and target_url:
-            set_cached(f"page:v2:{cache_key}", target_url, ttl=48 * 3600)
-            return jsonify({'status': 'success', 'message': 'Cached successfully'})
+            payload = {
+                'url': target_url,
+                'referer': referer,
+                'source': source,
+                'cached_at': int(time.time())
+            }
+            # حفظ الرابط مع الترويسات لمدة 48 ساعة
+            set_cached(f"page:v2:{cache_key}", payload, ttl=48 * 3600)
+            return jsonify({'status': 'success', 'message': 'Stream payload cached successfully'})
 
         return jsonify({'status': 'error', 'message': 'Invalid payload'}), 400
 
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
-
