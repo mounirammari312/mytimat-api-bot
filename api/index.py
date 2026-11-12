@@ -333,7 +333,7 @@ def index():
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '13.2.0-RichCatalog',
+        'version': '13.3.0-InfiniteSections',
     })
 
 
@@ -372,7 +372,7 @@ def get_config():
 
     return jsonify({
         'status': 'success',
-        'version': '13.2.0-RichCatalog',
+        'version': '13.3.0-InfiniteSections',
         'providers': [
             {
                 'name': 'akwam',
@@ -511,7 +511,7 @@ def get_config():
 
 
 # ==============================================================================
-# 3. مسار الرئيسية (الأقسام الثمانية عشر الغنية — 20 عملاً لكل قسم)
+# 3. مسار الرئيسية (الأقسام الثمانية عشر الغنية — كل قسم مهيأ للتمرير اللانهائي)
 # ==============================================================================
 
 def _fetch_tmdb_section_items(endpoint, media_type, lang, badge_ar=None, limit=20):
@@ -558,51 +558,87 @@ def _fetch_tmdb_section_items(endpoint, media_type, lang, badge_ar=None, limit=2
 def get_home():
     # v3.1.47+ — لغة المحتوى (lang من التطبيق؛ الافتراضي ar-SA كما كان).
     lang = normalize_lang(request.args.get('lang', ''))
-    CACHE_KEY = f'home_data_v8:{lang}'
+    CACHE_KEY = f'home_data_v9:{lang}'
     cached = get_cached(CACHE_KEY)
     if cached is not None:
         return jsonify(cached)
 
     try:
+        # كل قسم يحمل see_all_params الكاملة لكي يمررها التطبيق إلى /api/catalog
+        # عند التمرير اللانهائي دون أي بيانات ثابتة داخل APK.
         section_specs = [
-            # ── أقسام الأفلام (10 أقسام × 20 فيلماً) ──
-            ('trending_movies', '🔥 الأفلام الأكثر شهرة', True, {'type': 'movies', 'page': 1},
+            # ── أقسام الأفلام (10 أقسام لا نهائية) ──
+            ('trending_movies', '🔥 الأفلام الأكثر شهرة', True,
+             {'type': 'movies', 'page': 1},
              '/trending/movie/week', 'movie', None),
-            ('now_playing_movies', '🎬 يعرض الآن في السينما', False, {},
+
+            ('now_playing_movies', '🎬 يعرض الآن في السينما', True,
+             {'type': 'movies', 'page': 1, 'filter': 'now_playing'},
              '/movie/now_playing', 'movie', '🎬 يعرض الآن'),
-            ('top_rated_movies', '⭐ الأفلام الأعلى تقييماً', False, {},
+
+            ('top_rated_movies', '⭐ الأفلام الأعلى تقييماً', True,
+             {'type': 'movies', 'page': 1, 'sort_by': 'vote_average.desc'},
              '/movie/top_rated', 'movie', '⭐ الأعلى تقييماً'),
-            ('action_movies', '💥 قمة الأكشن والإثارة', False, {},
+
+            ('action_movies', '💥 قمة الأكشن والإثارة', True,
+             {'type': 'movies', 'page': 1, 'category': '28,53'},
              '/discover/movie?with_genres=28,53&sort_by=popularity.desc', 'movie', '💥 أكشن'),
-            ('scifi_fantasy_movies', '🚀 خيال علمي وفانتازيا', False, {},
+
+            ('scifi_fantasy_movies', '🚀 خيال علمي وفانتازيا', True,
+             {'type': 'movies', 'page': 1, 'category': '878,14'},
              '/discover/movie?with_genres=878,14&sort_by=popularity.desc', 'movie', '🚀 خيال علمي'),
-            ('horror_mystery_movies', '👻 رعب وغموض', False, {},
+
+            ('horror_mystery_movies', '👻 رعب وغموض', True,
+             {'type': 'movies', 'page': 1, 'category': '27,9648'},
              '/discover/movie?with_genres=27,9648&sort_by=popularity.desc', 'movie', '👻 رعب'),
-            ('comedy_movies', '😂 أفلام الكوميديا', False, {},
+
+            ('comedy_movies', '😂 أفلام الكوميديا', True,
+             {'type': 'movies', 'page': 1, 'category': '35'},
              '/discover/movie?with_genres=35&sort_by=popularity.desc', 'movie', '😂 كوميديا'),
-            ('drama_crime_movies', '🎭 دراما وجريمة', False, {},
+
+            ('drama_crime_movies', '🎭 دراما وجريمة', True,
+             {'type': 'movies', 'page': 1, 'category': '18,80'},
              '/discover/movie?with_genres=18,80&sort_by=popularity.desc', 'movie', '🎭 دراما'),
-            ('family_animation', '🍿 سينما العائلة والأنيميشن', False, {},
+
+            ('family_animation', '🍿 سينما العائلة والأنيميشن', True,
+             {'type': 'movies', 'page': 1, 'category': '16,10751'},
              '/discover/movie?with_genres=16,10751&sort_by=popularity.desc', 'movie', '🍿 عائلي'),
-            ('arabic_movies', '🇪🇬 أفلام عربية', False, {},
+
+            ('arabic_movies', '🇪🇬 أفلام عربية', True,
+             {'type': 'movies', 'page': 1, 'orig_lang': 'ar'},
              '/discover/movie?with_original_language=ar&sort_by=popularity.desc', 'movie', '🇪🇬 عربي'),
 
-            # ── أقسام المسلسلات (8 أقسام × 20 مسلسلاً) ──
-            ('trending_tv', '📺 المسلسلات الأكثر مشاهدة', True, {'type': 'series', 'page': 1},
+            # ── أقسام المسلسلات (8 أقسام لا نهائية) ──
+            ('trending_tv', '📺 المسلسلات الأكثر مشاهدة', True,
+             {'type': 'series', 'page': 1},
              '/trending/tv/week', 'tv', None),
-            ('top_rated_tv', '🏆 المسلسلات الأعلى تقييماً', False, {},
+
+            ('top_rated_tv', '🏆 المسلسلات الأعلى تقييماً', True,
+             {'type': 'series', 'page': 1, 'sort_by': 'vote_average.desc'},
              '/tv/top_rated', 'tv', '🏆 مميز'),
-            ('action_scifi_tv', '⚡ مسلسلات أكشن وخيال علمي', False, {},
+
+            ('action_scifi_tv', '⚡ مسلسلات أكشن وخيال علمي', True,
+             {'type': 'series', 'page': 1, 'category': '10759,10765'},
              '/discover/tv?with_genres=10759,10765&sort_by=popularity.desc', 'tv', '⚡ مغامرة'),
-            ('crime_drama_tv', '🕵️ مسلسلات جريمة ودراما', False, {},
+
+            ('crime_drama_tv', '🕵️ مسلسلات جريمة ودراما', True,
+             {'type': 'series', 'page': 1, 'category': '80,18'},
              '/discover/tv?with_genres=80,18&sort_by=popularity.desc', 'tv', '🕵️ جريمة'),
-            ('anime_animation_tv', '🎌 أنمي وكرتون', False, {},
+
+            ('anime_animation_tv', '🎌 أنمي وكرتون', True,
+             {'type': 'series', 'page': 1, 'category': '16'},
              '/discover/tv?with_genres=16&sort_by=popularity.desc', 'tv', '🎌 أنمي'),
-            ('kdrama_series', '🌟 أعمال حصرية / مسلسلات كورية', False, {},
+
+            ('kdrama_series', '🌟 أعمال حصرية / مسلسلات كورية', True,
+             {'type': 'series', 'page': 1, 'orig_lang': 'ko'},
              '/discover/tv?with_original_language=ko&sort_by=popularity.desc', 'tv', '🌟 كوري'),
-            ('turkish_series', '🇹🇷 مسلسلات تركية', False, {},
+
+            ('turkish_series', '🇹🇷 مسلسلات تركية', True,
+             {'type': 'series', 'page': 1, 'orig_lang': 'tr'},
              '/discover/tv?with_original_language=tr&sort_by=popularity.desc', 'tv', '🇹🇷 تركي'),
-            ('arabic_series', '🌙 مسلسلات عربية', False, {},
+
+            ('arabic_series', '🌙 مسلسلات عربية', True,
+             {'type': 'series', 'page': 1, 'orig_lang': 'ar'},
              '/discover/tv?with_original_language=ar&sort_by=popularity.desc', 'tv', '🌙 عربي'),
         ]
 
@@ -655,32 +691,32 @@ def get_home():
 
 
 # ==============================================================================
-# 4. مسار الكتالوج والفلترة (مضاعف: يجلب صفحتين = 40 عنصراً لكل طلب)
+# 4. مسار الكتالوج والفلترة (يدعم التمرير اللانهائي لكل الأقسام: 40 عنصراً لكل طلب)
 # ==============================================================================
 
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
-    """v13.2 (Rich Catalog): Catalog comes from TMDB Discover.
+    """v13.3 (Infinite Sections): Catalog comes from TMDB Discover / Now Playing.
     Each requested page fetches 2 consecutive TMDB pages (40 items) in parallel
-    so the app's 3-page injection loads ~120 latest movies + ~120 latest series.
-
-    Filter mapping (legacy Akwam sections → TMDB language filter):
-      section=29 (Arabic)    → with_original_language=ar
-      section=30 (Foreign)   → no filter (any non-Arabic falls through)
-      section=31 (Indian)   → with_original_language=hi
-      section=32 (Turkish)   → with_original_language=tr
-      section=0  (All)       → no filter
+    and dynamically honors category (comma-separated genre IDs), orig_lang,
+    sort_by, filter, year, and legacy section codes sent from see_all_params.
     """
     cat_type = request.args.get('type', 'movies').lower()  # movies | series
     page = request.args.get('page', '1')
-    section = request.args.get('section', '')
-    category = request.args.get('category', '')  # legacy: Akwam genre ID
-    year = request.args.get('year', '')
-    quality = request.args.get('quality', '')  # ignored — TMDB has no quality filter
+    section = request.args.get('section', '').strip()
+    category = request.args.get('category', '').strip()  # e.g. '28' or '28,53'
+    orig_lang = request.args.get('orig_lang', '').strip().lower()  # e.g. 'ar', 'ko', 'tr'
+    sort_by = request.args.get('sort_by', '').strip()  # e.g. 'vote_average.desc'
+    catalog_filter = request.args.get('filter', '').strip().lower()  # e.g. 'now_playing'
+    year = request.args.get('year', '').strip()
+    quality = request.args.get('quality', '').strip()
     # v3.1.47 — لغة المحتوى (توجيه المالك) + مفتاح كاش لكل لغة.
     lang = normalize_lang(request.args.get('lang', ''))
 
-    cache_key = f'catalog:v2:{cat_type}:{page}:{section}:{category}:{year}:{lang}'
+    cache_key = (
+        f'catalog:v3:{cat_type}:{page}:{section}:{category}:'
+        f'{orig_lang}:{sort_by}:{catalog_filter}:{year}:{lang}'
+    )
     cached = get_cached(cache_key)
     if cached is not None:
         return jsonify(cached)
@@ -688,26 +724,31 @@ def get_catalog():
     tmdb_type = 'movie' if cat_type == 'movies' else 'tv'
     page_int = int(page) if str(page).isdigit() and int(page) > 0 else 1
 
+    use_now_playing = (catalog_filter == 'now_playing' and tmdb_type == 'movie')
+
     # Build TMDB Discover base params
+    effective_sort = sort_by if sort_by else 'popularity.desc'
     base_params = {
         'api_key': TMDB_API_KEY,
         'language': lang,
-        'sort_by': 'popularity.desc',
+        'sort_by': effective_sort,
         'include_adult': 'false',
     }
+    if effective_sort == 'vote_average.desc':
+        base_params['vote_count.gte'] = '250'
 
-    # Section → with_original_language
+    # Original language: direct orig_lang param takes priority, fallback to legacy section map
     section_lang_map = {
         '29': 'ar',   # عربي
         '31': 'hi',   # هندي
         '32': 'tr',   # تركي
-        # '30' (أجنبي) و '0' (الكل) → بدون فلتر لغة
     }
-    if section in section_lang_map:
-        base_params['with_original_language'] = section_lang_map[section]
+    resolved_orig_lang = orig_lang if re.match(r'^[a-z]{2}$', orig_lang) else section_lang_map.get(section, '')
+    if resolved_orig_lang:
+        base_params['with_original_language'] = resolved_orig_lang
 
-    # Category → with_genres (TMDB genre IDs)
-    if category and category.isdigit():
+    # Category → with_genres (supports single '28' and comma-separated '28,53' TMDB genre IDs)
+    if category and re.match(r'^[\d,]+$', category):
         base_params['with_genres'] = category
 
     # Year filter
@@ -720,6 +761,13 @@ def get_catalog():
             base_params['first_air_date.lte'] = f'{year}-12-31'
 
     def _fetch_discover_page(tmdb_page_num):
+        if use_now_playing:
+            np_params = {
+                'api_key': TMDB_API_KEY,
+                'language': lang,
+                'page': str(tmdb_page_num),
+            }
+            return requests.get(f'{TMDB_BASE_URL}/movie/now_playing', params=np_params, headers=TMDB_HEADERS, timeout=4)
         params = dict(base_params)
         params['page'] = str(tmdb_page_num)
         discover_url = f'{TMDB_BASE_URL}/discover/{tmdb_type}'
@@ -783,6 +831,9 @@ def get_catalog():
                 'filters': {
                     'section': section or 'all',
                     'category': category or 'all',
+                    'orig_lang': resolved_orig_lang or 'all',
+                    'sort_by': effective_sort,
+                    'filter': catalog_filter or 'all',
                     'year': year or 'all',
                     'quality': quality or 'all',
                 },
