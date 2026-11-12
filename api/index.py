@@ -1,6 +1,3 @@
-
-
-
 import os
 import time
 from urllib.parse import quote, unquote, urlparse
@@ -23,7 +20,7 @@ except ImportError:
 
 app = Flask(__name__)
 
-# تأمين المفاتيح عبر متغيرات البيئة في Vercel مع الإبقاء على القيم الافتراضية
+# تأمين المفاتيح عبر متغيرات البيئة في Vercel مع الإبقاء على القيم الافتراضية كاحتياط
 TMDB_API_KEY = os.environ.get('TMDB_API_KEY', '65687d1e167bc35f38ee0c88c3a37b74')
 TMDB_BASE_URL = 'https://api.themoviedb.org/3'
 
@@ -31,8 +28,8 @@ TMDB_BASE_URL = 'https://api.themoviedb.org/3'
 # ⚡ Upstash Redis Configuration
 # ==============================================================================
 
-UPSTASH_REDIS_REST_URL = os.environ.get('UPSTASH_REDIS_REST_URL', "https://immortal-redfish-188577.upstash.io")
-UPSTASH_REDIS_REST_TOKEN = os.environ.get('UPSTASH_REDIS_REST_TOKEN', "gQAAAAAAAuChAAIgcDI2MGIzYmQwZTdhYTQ0Y2MxYjFmZTU1YjU2ZGMyNGI0Mw")
+UPSTASH_REDIS_REST_URL = os.environ.get('UPSTASH_REDIS_REST_URL', 'https://immortal-redfish-188577.upstash.io')
+UPSTASH_REDIS_REST_TOKEN = os.environ.get('UPSTASH_REDIS_REST_TOKEN', 'gQAAAAAAAuChAAIgcDI2MGIzYmQwZTdhYTQ0Y2MxYjFmZTU1YjU2ZGMyNGI0Mw')
 CACHE_TTL_SECONDS = 6 * 3600  # 6 ساعات صلاحية الكاش
 
 
@@ -88,6 +85,47 @@ def clean_query_term(text):
         return ""
     cleaned = re.sub(r'[:\-_.,?!()\[\]/\\+*&^%$#@~`"\']', ' ', str(text))
     return ' '.join(cleaned.split()).strip()
+
+
+# ==============================================================================
+# v3.1.47 — لغة محتوى السينما (توجيه المالك: لغة المحتوى تتبع لغة التطبيق)
+# التطبيق يرسل lang=en-US عندما يكون بالإنجليزية وlang=ar-SA عندما يكون
+# بالعربية؛ الغياب أو أي قيمة أخرى → ar-SA (السلوك الأصلي حرفياً).
+# ==============================================================================
+
+def normalize_lang(raw):
+    """en / en-US / en-GB → en-US؛ أي شيء آخر (أو غياب) → ar-SA."""
+    if raw and str(raw).strip().lower().startswith('en'):
+        return 'en-US'
+    return 'ar-SA'
+
+
+def is_en(lang):
+    return lang == 'en-US'
+
+
+# v3.1.47 — أسماء الأقسام المعروفة بالإنجليزية (نفس مفاتيح الأقسام؛
+# العربية تبقى عناوين السيرفر الحرفية).
+EN_SECTION_TITLES = {
+    'trending_movies': 'Popular Movies',
+    'trending_tv': 'Popular Series',
+    'top_rated_movies': 'Top Rated Movies',
+    'action_movies': 'Action & Thriller',
+    'family_animation': 'Family & Animation',
+    'kdrama_series': 'K-Drama Series',
+}
+
+# v3.1.47 — بطاقات الوسوم (التصنيف المصغّر على البطاقة) بلغة الطلب.
+def section_tag(ar_tag, lang):
+    """وسم البطاقة بلغة المحتوى (⭐ الأعلى تقييماً → ⭐ Top Rated …)."""
+    if not is_en(lang):
+        return ar_tag
+    return {
+        '⭐ الأعلى تقييماً': '⭐ Top Rated',
+        '💥 أكشن': '💥 Action',
+        '🍿 عائلي': '🍿 Family',
+        '🌟 كوري': '🌟 Korean',
+    }.get(ar_tag, ar_tag)
 
 
 # ==============================================================================
@@ -191,7 +229,7 @@ def format_profile(profile_path):
     return f'https://image.tmdb.org/t/p/w185{profile_path}' if profile_path else ''
 
 
-def resolve_tmdb_tv_id(candidate_id, title=None, orig_title=None):
+def resolve_tmdb_tv_id(candidate_id, title=None, orig_title=None, lang='ar-SA'):
     """استخراج أو البحث عن معرّف المسلسل الرقمي في TMDB بدقة عالية."""
     if candidate_id and str(candidate_id).strip().isdigit():
         return str(candidate_id).strip()
@@ -202,7 +240,7 @@ def resolve_tmdb_tv_id(candidate_id, title=None, orig_title=None):
             continue
         try:
             cleaned = clean_query_term(q)
-            s_url = f'{TMDB_BASE_URL}/search/tv?api_key={TMDB_API_KEY}&query={quote(cleaned)}&language=ar-SA'
+            s_url = f'{TMDB_BASE_URL}/search/tv?api_key={TMDB_API_KEY}&query={quote(cleaned)}&language={normalize_lang(lang)}'
             s_res = requests.get(s_url, headers=TMDB_HEADERS, timeout=3.5)
             if s_res.status_code == 200:
                 results = s_res.json().get('results', [])
@@ -213,13 +251,13 @@ def resolve_tmdb_tv_id(candidate_id, title=None, orig_title=None):
     return None
 
 
-def fetch_tmdb_series_meta(clean_tmdb_id):
+def fetch_tmdb_series_meta(clean_tmdb_id, lang='ar-SA'):
     """جلب القصة والممثلين بالصور والمسلسلات المشابهة من TMDB."""
     if not clean_tmdb_id:
         return "", [], []
 
     try:
-        t_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}?api_key={TMDB_API_KEY}&language=ar-SA&append_to_response=credits,similar'
+        t_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}?api_key={TMDB_API_KEY}&language={normalize_lang(lang)}&append_to_response=credits,similar'
         res = requests.get(t_url, headers=TMDB_HEADERS, timeout=3.5)
         if res.status_code != 200:
             return "", [], []
@@ -452,7 +490,9 @@ def get_config():
 
 @app.route('/api/home', methods=['GET'])
 def get_home():
-    CACHE_KEY = 'home_data_v7'
+    # v3.1.47 — لغة المحتوى (lang من التطبيق؛ الافتراضي ar-SA كما كان).
+    lang = normalize_lang(request.args.get('lang', ''))
+    CACHE_KEY = f'home_data_v7:{lang}'
     cached = get_cached(CACHE_KEY)
     if cached is not None:
         return jsonify(cached)
@@ -467,7 +507,7 @@ def get_home():
 
         try:
             m_res = requests.get(
-                f'{TMDB_BASE_URL}/trending/movie/week?api_key={TMDB_API_KEY}&language=ar-SA',
+                f'{TMDB_BASE_URL}/trending/movie/week?api_key={TMDB_API_KEY}&language={lang}',
                 headers=TMDB_HEADERS,
                 timeout=2.5
             )
@@ -492,7 +532,7 @@ def get_home():
 
         try:
             t_res = requests.get(
-                f'{TMDB_BASE_URL}/trending/tv/week?api_key={TMDB_API_KEY}&language=ar-SA',
+                f'{TMDB_BASE_URL}/trending/tv/week?api_key={TMDB_API_KEY}&language={lang}',
                 headers=TMDB_HEADERS,
                 timeout=2.5
             )
@@ -517,7 +557,7 @@ def get_home():
 
         try:
             top_res = requests.get(
-                f'{TMDB_BASE_URL}/movie/top_rated?api_key={TMDB_API_KEY}&language=ar-SA',
+                f'{TMDB_BASE_URL}/movie/top_rated?api_key={TMDB_API_KEY}&language={lang}',
                 headers=TMDB_HEADERS,
                 timeout=2.5
             )
@@ -531,7 +571,7 @@ def get_home():
                         'poster': format_poster(m.get('poster_path')),
                         'backdrop': format_backdrop(m.get('backdrop_path') or m.get('poster_path')),
                         'rating': round(m.get('vote_average', 0), 1),
-                        'tags': ['⭐ الأعلى تقييماً', str(m.get('release_date', ''))[:4] if m.get('release_date') else ''],
+                        'tags': [section_tag('⭐ الأعلى تقييماً', lang), str(m.get('release_date', ''))[:4] if m.get('release_date') else ''],
                         'type': 'movie',
                     }
                     for m in top_res.json().get('results', [])[:10]
@@ -541,7 +581,7 @@ def get_home():
             print(f"⚠️ Top Rated Error: {e}")
 
         try:
-            action_url = f'{TMDB_BASE_URL}/discover/movie?api_key={TMDB_API_KEY}&with_genres=28&sort_by=popularity.desc&language=ar-SA'
+            action_url = f'{TMDB_BASE_URL}/discover/movie?api_key={TMDB_API_KEY}&with_genres=28&sort_by=popularity.desc&language={lang}'
             action_res = requests.get(action_url, headers=TMDB_HEADERS, timeout=2.5)
             if action_res.status_code == 200:
                 action_movies = [
@@ -553,7 +593,7 @@ def get_home():
                         'poster': format_poster(m.get('poster_path')),
                         'backdrop': format_backdrop(m.get('backdrop_path') or m.get('poster_path')),
                         'rating': round(m.get('vote_average', 0), 1),
-                        'tags': ['💥 أكشن', str(m.get('release_date', ''))[:4] if m.get('release_date') else ''],
+                        'tags': [section_tag('💥 أكشن', lang), str(m.get('release_date', ''))[:4] if m.get('release_date') else ''],
                         'type': 'movie',
                     }
                     for m in action_res.json().get('results', [])[:10]
@@ -563,7 +603,7 @@ def get_home():
             print(f"⚠️ Action Movies Error: {e}")
 
         try:
-            family_url = f'{TMDB_BASE_URL}/discover/movie?api_key={TMDB_API_KEY}&with_genres=16,10751&sort_by=popularity.desc&language=ar-SA'
+            family_url = f'{TMDB_BASE_URL}/discover/movie?api_key={TMDB_API_KEY}&with_genres=16,10751&sort_by=popularity.desc&language={lang}'
             family_res = requests.get(family_url, headers=TMDB_HEADERS, timeout=2.5)
             if family_res.status_code == 200:
                 family_animation = [
@@ -575,7 +615,7 @@ def get_home():
                         'poster': format_poster(m.get('poster_path')),
                         'backdrop': format_backdrop(m.get('backdrop_path') or m.get('poster_path')),
                         'rating': round(m.get('vote_average', 0), 1),
-                        'tags': ['🍿 عائلي', str(m.get('release_date', ''))[:4] if m.get('release_date') else ''],
+                        'tags': [section_tag('🍿 عائلي', lang), str(m.get('release_date', ''))[:4] if m.get('release_date') else ''],
                         'type': 'movie',
                     }
                     for m in family_res.json().get('results', [])[:10]
@@ -585,7 +625,7 @@ def get_home():
             print(f"⚠️ Family Animation Error: {e}")
 
         try:
-            kdrama_url = f'{TMDB_BASE_URL}/discover/tv?api_key={TMDB_API_KEY}&with_original_language=ko&sort_by=popularity.desc&language=ar-SA'
+            kdrama_url = f'{TMDB_BASE_URL}/discover/tv?api_key={TMDB_API_KEY}&with_original_language=ko&sort_by=popularity.desc&language={lang}'
             kdrama_res = requests.get(kdrama_url, headers=TMDB_HEADERS, timeout=2.5)
             if kdrama_res.status_code == 200:
                 kdrama_series = [
@@ -597,7 +637,7 @@ def get_home():
                         'poster': format_poster(t.get('poster_path')),
                         'backdrop': format_backdrop(t.get('backdrop_path') or t.get('poster_path')),
                         'rating': round(t.get('vote_average', 0), 1),
-                        'tags': ['🌟 كوري', str(t.get('first_air_date', ''))[:4] if t.get('first_air_date') else ''],
+                        'tags': [section_tag('🌟 كوري', lang), str(t.get('first_air_date', ''))[:4] if t.get('first_air_date') else ''],
                         'type': 'tv',
                     }
                     for t in kdrama_res.json().get('results', [])[:10]
@@ -664,6 +704,13 @@ def get_home():
                 'items': kdrama_series,
             })
 
+        # v3.1.47 — أسماء الأقسام بلغة الطلب (المفاتيح المعروفة فقط؛
+        # أي قسم جديد من السيرفر يبقى بعنوانه الأصلي دون تحديث التطبيق).
+        if is_en(lang):
+            for s in sections_list:
+                if s.get('key') in EN_SECTION_TITLES:
+                    s['title'] = EN_SECTION_TITLES[s['key']]
+
         result = {
             'status': 'success',
             'data': sections_list
@@ -701,8 +748,10 @@ def get_catalog():
     category = request.args.get('category', '')  # legacy: Akwam genre ID
     year = request.args.get('year', '')
     quality = request.args.get('quality', '')  # ignored — TMDB has no quality filter
+    # v3.1.47 — لغة المحتوى (توجيه المالك) + مفتاح كاش لكل لغة.
+    lang = normalize_lang(request.args.get('lang', ''))
 
-    cache_key = f'catalog:{cat_type}:{page}:{section}:{category}:{year}'
+    cache_key = f'catalog:{cat_type}:{page}:{section}:{category}:{year}:{lang}'
     cached = get_cached(cache_key)
     if cached is not None:
         return jsonify(cached)
@@ -712,7 +761,7 @@ def get_catalog():
     # Build TMDB Discover params
     discover_params = {
         'api_key': TMDB_API_KEY,
-        'language': 'ar-SA',
+        'language': lang,
         'page': page,
         'sort_by': 'popularity.desc',
         'include_adult': 'false',
@@ -757,7 +806,8 @@ def get_catalog():
         for r in results:
             if not r.get('poster_path'):
                 continue  # skip items without posters
-            title = r.get('title') or r.get('name') or r.get('original_title') or 'غير متوفر'
+            title = r.get('title') or r.get('name') or r.get('original_title') or (
+                'Unavailable' if is_en(lang) else 'غير متوفر')
             orig_title = r.get('original_title') or r.get('original_name') or ''
             date_field = r.get('release_date') or r.get('first_air_date') or ''
             year_tag = date_field[:4] if date_field else ''
@@ -810,13 +860,15 @@ def search():
     if not query:
         return jsonify({'status': 'error', 'message': 'Query missing'}), 400
 
-    cache_key = f'search:{query.lower().strip()}'
+    # v3.1.47 — لغة المحتوى + مفتاح كاش لكل لغة.
+    lang = normalize_lang(request.args.get('lang', ''))
+    cache_key = f'search:{query.lower().strip()}:{lang}'
     cached = get_cached(cache_key)
     if cached is not None:
         return jsonify(cached)
 
     try:
-        search_url = f'{TMDB_BASE_URL}/search/multi?api_key={TMDB_API_KEY}&query={quote(query)}&language=ar-SA'
+        search_url = f'{TMDB_BASE_URL}/search/multi?api_key={TMDB_API_KEY}&query={quote(query)}&language={lang}'
         res = requests.get(search_url, headers=TMDB_HEADERS, timeout=5)
 
         if res.status_code != 200:
@@ -829,7 +881,8 @@ def search():
                 vote_avg = item.get('vote_average')
                 rating = round(vote_avg, 1) if isinstance(vote_avg, (int, float)) else 0.0
 
-                title = item.get('title') or item.get('name') or item.get('original_title') or 'بدون عنوان'
+                title = item.get('title') or item.get('name') or item.get('original_title') or (
+                    'Untitled' if is_en(lang) else 'بدون عنوان')
                 orig_title = item.get('original_name') or item.get('original_title') or ''
                 poster_path = item.get('poster_path')
 
@@ -877,11 +930,13 @@ def get_series_details():
     orig_title = request.args.get('original_title', '').strip()
     selected_season = request.args.get('season', '1').strip()
     target_year = request.args.get('year', '').strip()
+    # v3.1.47 — لغة المحتوى + مفتاح كاش لكل لغة.
+    lang = normalize_lang(request.args.get('lang', ''))
 
     # استخراج TMDB ID أولاً لضمان الاعتماد على قاعدة البيانات العالمية
-    clean_tmdb_id = resolve_tmdb_tv_id(tmdb_id or series_url, title=title, orig_title=orig_title)
+    clean_tmdb_id = resolve_tmdb_tv_id(tmdb_id or series_url, title=title, orig_title=orig_title, lang=lang)
 
-    cache_key = f'series:v3:{clean_tmdb_id or series_url}:{selected_season}'
+    cache_key = f'series:v3:{clean_tmdb_id or series_url}:{selected_season}:{lang}'
     cached = get_cached(cache_key)
     if cached is not None:
         return jsonify(cached)
@@ -891,14 +946,24 @@ def get_series_details():
     # ══════════════════════════════════════════════════════════════════════════
     if clean_tmdb_id:
         try:
-            tmdb_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}?api_key={TMDB_API_KEY}&language=ar-SA&append_to_response=credits,similar'
+            tmdb_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}?api_key={TMDB_API_KEY}&language={lang}&append_to_response=credits,similar'
             res_tv_obj = requests.get(tmdb_url, headers=TMDB_HEADERS, timeout=4)
             if res_tv_obj.status_code == 200:
                 res_tv = res_tv_obj.json()
 
-                tv_title = res_tv.get('name') or title or 'مسلسل'
+                tv_title = res_tv.get('name') or title or ('Series' if is_en(lang) else 'مسلسل')
                 tv_orig_title = res_tv.get('original_name') or orig_title or tv_title
+                # v3.1.47 — قانون الرجوع للإنجليزية (توجيه المالك حرفياً):
+                # وصف عربي فارغ على TMDB → نستعير الوصف الإنجليزي بدل الفراغ.
                 overview = res_tv.get('overview', '')
+                if not is_en(lang) and not overview.strip():
+                    try:
+                        fb_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}?api_key={TMDB_API_KEY}&language=en-US'
+                        fb_res = requests.get(fb_url, headers=TMDB_HEADERS, timeout=4)
+                        if fb_res.status_code == 200:
+                            overview = fb_res.json().get('overview', '') or overview
+                    except Exception:
+                        pass
 
                 # طاقم التمثيل بالصور الحقيقية
                 cast = [
@@ -934,12 +999,13 @@ def get_series_details():
                     if s_num > 0:
                         seasons.append({
                             'season_number': s_num,
-                            'title': s.get('name') or f'الموسم {s_num}',
+                            'title': s.get('name') or (
+                                f'Season {s_num}' if is_en(lang) else f'الموسم {s_num}'),
                             'episode_count': s.get('episode_count', 0),
                         })
 
                 season_num = int(selected_season) if selected_season.isdigit() else 1
-                ep_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}/season/{season_num}?api_key={TMDB_API_KEY}&language=ar-SA'
+                ep_url = f'{TMDB_BASE_URL}/tv/{clean_tmdb_id}/season/{season_num}?api_key={TMDB_API_KEY}&language={lang}'
                 res_ep = requests.get(ep_url, headers=TMDB_HEADERS, timeout=4).json()
 
                 # صياغة استعلامات بحث ذكية وموحدة للحلقات
@@ -949,10 +1015,15 @@ def get_series_details():
 
                 for ep in res_ep.get('episodes', []):
                     ep_num = ep.get('episode_number')
+                    # v3.1.47 — عنوان الحلقة المعروض بلغة المحتوى؛
+                    # search_title/search_orig_title يبقيان بصيغتهما
+                    # العربية/اللاتينية (استعلامات مواقع المزودين).
+                    ep_display = f"Episode {ep_num} - {ep.get('name', '')}" if is_en(lang) \
+                        else f"الحلقة {ep_num} - {ep.get('name', '')}"
                     episodes.append({
                         'season_number': season_num,
                         'episode_number': ep_num,
-                        'title': f"الحلقة {ep_num} - {ep.get('name', '')}",
+                        'title': ep_display,
                         'search_title': f"{clean_base_title} الموسم {season_num} الحلقة {ep_num}",
                         'search_orig_title': f"{clean_base_orig} S{season_num:02d}E{ep_num:02d}",
                     })
@@ -999,8 +1070,10 @@ def get_series_details():
 def get_movie_details():
     tmdb_id = request.args.get('id', '').strip()
     title = request.args.get('title', '').strip()
+    # v3.1.47 — لغة المحتوى + مفتاح كاش لكل لغة.
+    lang = normalize_lang(request.args.get('lang', ''))
 
-    cache_key = f'movie:v2:{tmdb_id or title}'
+    cache_key = f'movie:v2:{tmdb_id or title}:{lang}'
     cached = get_cached(cache_key)
     if cached is not None:
         return jsonify(cached)
@@ -1010,7 +1083,7 @@ def get_movie_details():
         clean_id = tmdb_id
     elif title:
         try:
-            search_url = f'{TMDB_BASE_URL}/search/movie?api_key={TMDB_API_KEY}&query={quote(clean_query_term(title))}&language=ar-SA'
+            search_url = f'{TMDB_BASE_URL}/search/movie?api_key={TMDB_API_KEY}&query={quote(clean_query_term(title))}&language={lang}'
             res = requests.get(search_url, headers=TMDB_HEADERS, timeout=4)
             if res.status_code == 200:
                 results = res.json().get('results', [])
@@ -1027,19 +1100,30 @@ def get_movie_details():
         })
 
     try:
-        detail_url = f'{TMDB_BASE_URL}/movie/{clean_id}?api_key={TMDB_API_KEY}&language=ar-SA&append_to_response=credits,videos,similar'
+        detail_url = f'{TMDB_BASE_URL}/movie/{clean_id}?api_key={TMDB_API_KEY}&language={lang}&append_to_response=credits,videos,similar'
         res = requests.get(detail_url, headers=TMDB_HEADERS, timeout=4)
         if res.status_code != 200:
             return jsonify({'status': 'success', 'data': None})
 
         data = res.json()
+        # v3.1.47 — قانون الرجوع للإنجليزية (توجيه المالك حرفياً): وصف
+        # عربي فارغ على TMDB → نستعير الوصف الإنجليزي بدل الفراغ.
+        overview = data.get('overview', '')
+        if not is_en(lang) and not overview.strip():
+            try:
+                fb_url = f'{TMDB_BASE_URL}/movie/{clean_id}?api_key={TMDB_API_KEY}&language=en-US&append_to_response=credits,videos,similar'
+                fb_res = requests.get(fb_url, headers=TMDB_HEADERS, timeout=4)
+                if fb_res.status_code == 200:
+                    overview = fb_res.json().get('overview', '') or overview
+            except Exception:
+                pass
         result = {
             'status': 'success',
             'data': {
                 'id': str(data.get('id', '')),
                 'title': data.get('title', ''),
                 'original_title': data.get('original_title', ''),
-                'overview': data.get('overview', ''),
+                'overview': overview,
                 'release_date': data.get('release_date', ''),
                 'runtime': data.get('runtime', 0),
                 'rating': round(data.get('vote_average', 0), 1),
@@ -1088,7 +1172,7 @@ def get_movie_details():
 
 
 # ==============================================================================
-# 8. كاش صفحات المشاهدة المشترك (v2)
+# 8. كاش صفحات المشاهدة والروابط المشترك (v2 — يدعم Referer وتفادي 403)
 # ==============================================================================
 
 @app.route('/api/page-cache', methods=['GET', 'POST'])
@@ -1137,3 +1221,5 @@ def handle_page_cache():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
+
+
