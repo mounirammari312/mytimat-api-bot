@@ -370,7 +370,7 @@ def get_config():
         'status': 'success',
         'version': '13.2.0-GlobalTest',
         'providers': [
-            make_global_provider('vidlink'),
+        
             make_global_provider('multiembed'),
             make_global_provider('2embed'),
             make_global_provider('vidsrc-buzz'),
