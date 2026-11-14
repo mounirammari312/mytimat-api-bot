@@ -1,7 +1,6 @@
 
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote, unquote, urlparse
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
@@ -106,51 +105,27 @@ def is_en(lang):
     return lang == 'en-US'
 
 
-# v3.1.47+ — أسماء الأقسام المعروفة بالإنجليزية (نفس مفاتيح الأقسام؛
+# v3.1.47 — أسماء الأقسام المعروفة بالإنجليزية (نفس مفاتيح الأقسام؛
 # العربية تبقى عناوين السيرفر الحرفية).
 EN_SECTION_TITLES = {
     'trending_movies': 'Popular Movies',
-    'now_playing_movies': 'Now Playing in Cinema',
+    'trending_tv': 'Popular Series',
     'top_rated_movies': 'Top Rated Movies',
     'action_movies': 'Action & Thriller',
-    'scifi_fantasy_movies': 'Sci-Fi & Fantasy',
-    'horror_mystery_movies': 'Horror & Mystery',
-    'comedy_movies': 'Comedy Movies',
-    'drama_crime_movies': 'Drama & Crime',
     'family_animation': 'Family & Animation',
-    'arabic_movies': 'Arabic Movies',
-    'trending_tv': 'Popular Series',
-    'top_rated_tv': 'Top Rated Series',
-    'action_scifi_tv': 'Action & Sci-Fi Series',
-    'crime_drama_tv': 'Crime & Drama Series',
-    'anime_animation_tv': 'Anime & Animation',
     'kdrama_series': 'K-Drama Series',
-    'turkish_series': 'Turkish Series',
-    'arabic_series': 'Arabic Series',
 }
 
-# v3.1.47+ — بطاقات الوسوم (التصنيف المصغّر على البطاقة) بلغة الطلب.
+# v3.1.47 — بطاقات الوسوم (التصنيف المصغّر على البطاقة) بلغة الطلب.
 def section_tag(ar_tag, lang):
     """وسم البطاقة بلغة المحتوى (⭐ الأعلى تقييماً → ⭐ Top Rated …)."""
     if not is_en(lang):
         return ar_tag
     return {
         '⭐ الأعلى تقييماً': '⭐ Top Rated',
-        '🎬 يعرض الآن': '🎬 Now Playing',
         '💥 أكشن': '💥 Action',
-        '🚀 خيال علمي': '🚀 Sci-Fi',
-        '👻 رعب': '👻 Horror',
-        '😂 كوميديا': '😂 Comedy',
-        '🎭 دراما': '🎭 Drama',
         '🍿 عائلي': '🍿 Family',
-        '🇪🇬 عربي': '🇪🇬 Arabic',
-        '🏆 مميز': '🏆 Top Series',
-        '⚡ مغامرة': '⚡ Adventure',
-        '🕵️ جريمة': '🕵️ Crime',
-        '🎌 أنمي': '🎌 Anime',
         '🌟 كوري': '🌟 Korean',
-        '🇹🇷 تركي': '🇹🇷 Turkish',
-        '🌙 عربي': '🌙 Arabic',
     }.get(ar_tag, ar_tag)
 
 
@@ -333,7 +308,7 @@ def index():
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '13.3.0-InfiniteSections',
+        'version': '13.1.0-ServerControl',
     })
 
 
@@ -365,311 +340,360 @@ def test_redis_debug():
 
 @app.route('/api/config', methods=['GET'])
 def get_config():
-    akwam_headers = get_vault_session("akwam", AKWAM_BASE_DOMAIN)
-    larroza_headers = get_vault_session("larroza", LARROZA_BASE_DOMAIN)
-    moviz_headers = get_vault_session("moviz", "https://moviz-time.cfd")
-    qfilm_headers = get_vault_session("qfilm", "https://a.qfilm.tv")
+    base_url = request.url_root.rstrip('/')
+    if base_url.startswith('http://') and 'localhost' not in base_url and '127.0.0.1' not in base_url:
+        base_url = 'https://' + base_url[len('http://'):]
+
+    global_headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Referer': f'{base_url}/'
+    }
+
+    def make_global_provider(name):
+        return {
+            'name': name,
+            'domain': base_url,
+            'search_path': f'/api/global-search?provider={name}&q={{query}}',
+            'card_selector': 'a.global-card',
+            'iframe_selector': 'iframe',
+            'link_regex': r'''https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*''',
+            'requires_unpack': False,
+            'ajax_required': False,
+            'tmdb_mode': False,
+            'active_headers': global_headers,
+            'card_url_selector': 'a.global-card',
+            'card_title_selector': 'img[alt]',
+            'match_threshold': 0.35,
+        }
 
     return jsonify({
         'status': 'success',
-        'version': '13.3.0-InfiniteSections',
+        'version': '13.2.0-GlobalTest',
         'providers': [
-            {
-                'name': 'akwam',
-                'domain': AKWAM_BASE_DOMAIN,
-                'search_path': '/search?q={query}',
-                'catalog_path': '/movies?page={page}&section={section}',
-                'series_catalog_path': '/series?page={page}&section={section}',
-                'card_selector': 'div.entry-box',
-                'movie_selector': 'a[href*=/movie/]',
-                'series_selector': 'a[href*=/series/]',
-                'ep_selector': 'a[href*=/episode/]',
-                'watch_selector': 'a[href*=/watch/], a.link-btn',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:mp4)[^\s"\'<>]*',
-                'requires_unpack': False,
-                'active_headers': akwam_headers,
-                # v13.1: Server-controllable extraction fields
-                'card_url_selector': 'a[href]',
-                'card_title_selector': 'img[alt]',
-                'card_poster_selector': 'img',
-                'card_poster_attr': 'data-src',
-                'match_threshold': 0.65,
-                'extractor_script': r"""
-                    (function() {
-                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:mp4)[^\s"'<>]*/i);
-                        if (match) {
-                            return {
-                                url: match[0],
-                                referer: __PAGE_URL__,
-                                quality: '1080p FHD'
-                            };
-                        }
-                        return null;
-                    })();
-                """
-            },
-            {
-                'name': 'larroza',
-                'domain': LARROZA_BASE_DOMAIN,
-                'search_path': '/search.php?keywords={query}',
-                'catalog_path': '/newvideos1.php?page={page}',
-                'series_catalog_path': '/moslslat4.php?page={page}',
-                'card_selector': 'a[href*=video.php]',
-                'iframe_selector': 'iframe',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-                'requires_unpack': True,
-                'active_headers': larroza_headers,
-                # v13.1: Server-controllable extraction fields
-                'card_url_selector': 'a[href]',
-                'card_title_selector': 'img[alt]',
-                'card_poster_selector': 'img',
-                'card_poster_attr': 'data-echo',
-                'match_threshold': 0.55,
-                'extractor_script': r"""
-                    (function() {
-                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
-                        if (match) {
-                            return {
-                                url: match[0],
-                                referer: __PAGE_URL__,
-                                quality: match[0].indexOf('.m3u8') !== -1 ? 'HLS' : '1080p'
-                            };
-                        }
-                        return null;
-                    })();
-                """
-            },
-            {
-                # v12.3: Moviz-Time re-enabled with requires_webview=true.
-                # FirePlayer JS generates the stream URL at runtime via vhash.
-                # We load the iframe page in a hidden WebView, let FirePlayer
-                # + JWPlayer initialize naturally, and intercept the actual
-                # m3u8 URL via shouldInterceptRequest. This is the universal
-                # approach for ANY JS-driven player framework.
-                'name': 'moviz-time',
-                'domain': 'https://moviz-time.cfd',
-                'search_path': '/?s={query}',
-                'card_selector': 'article.pinbox .thumb a, h2.title-2 a, h3.title-2 a, article.pinbox a[href]',
-                'iframe_selector': 'iframe, iframe[data-src], [data-src], [data-url], [data-link]',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|txt)[^\s"\'<>]*',
-                'requires_unpack': False,
-                'ajax_required': False,
-                'requires_webview': True,  # ← v12.3: uses JsStreamExtractor
-                'series_selector': 'article.pinbox a[href]',
-                'active_headers': moviz_headers,
-                'extractor_script': r"""
-                    (function() {
-                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4|txt)[^\s"'<>]*/i);
-                        if (match) {
-                            return {
-                                url: match[0],
-                                referer: __PAGE_URL__,
-                                quality: 'Auto'
-                            };
-                        }
-                        return null;
-                    })();
-                """
-            },
-            {
-                'name': 'qfilm',
-                'domain': 'https://a.qfilm.tv',
-                'search_path': '/search.php?keywords={query}',
-                'catalog_path': '/browse.php?page={page}',
-                'series_catalog_path': '/moslslat.php?page={page}',
-                'card_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"], .pm-search-results a[href*="watch.php"]',
-                'movie_selector': 'ul.pm-ul-browse-videos a[href*="watch.php"], .pm-li-video a[href*="watch.php"], .pm-video-thumb a[href*="watch.php"]',
-                'series_selector': 'a[href*="series.php"], a[href*="watch.php"]',
-                # v13.1: Server-controllable extraction fields
-                'card_url_selector': 'a[href]',
-                'card_title_selector': 'h3.caption, img[alt]',
-                'card_poster_selector': 'img',
-                'card_poster_attr': 'data-echo',
-                'match_threshold': 0.55,
-                # v12.2.7: QFilm iframe_selector updated to include option[value]
-                'iframe_selector': 'iframe, option[value]',
-                'link_regex': r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)[^\s"\'<>]*',
-                'ajax_required': True,
-                'requires_unpack': False,
-                'active_headers': qfilm_headers,
-                'extractor_script': r"""
-                    (function() {
-                        var match = __HTML__.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*/i);
-                        if (match) {
-                            return {
-                                url: match[0],
-                                referer: __PAGE_URL__,
-                                quality: 'HD'
-                            };
-                        }
-                        return null;
-                    })();
-                """
-            },
+            make_global_provider('vidlink'),
+            make_global_provider('multiembed'),
+            make_global_provider('2embed'),
+            make_global_provider('vidsrc-buzz'),
         ],
     })
 
 
-# ==============================================================================
-# 3. مسار الرئيسية (الأقسام الثمانية عشر الغنية — كل قسم مهيأ للتمرير اللانهائي)
-# ==============================================================================
+@app.route('/api/global-search', methods=['GET'])
+def global_search_bridge():
+    provider = request.args.get('provider', 'vidlink').strip().lower()
+    raw_q = request.args.get('q', '').strip()
+    if not raw_q:
+        return '<html><body></body></html>', 200, {'Content-Type': 'text/html; charset=utf-8'}
 
-def _fetch_tmdb_section_items(endpoint, media_type, lang, badge_ar=None, limit=20):
-    """جلب قائمة أفلام أو مسلسلات من TMDB وتنسيقها بنفس بنية التطبيق."""
+    # Detect TV episode markers: S01E02 or الموسم 1 الحلقة 2
+    season = None
+    episode = None
+    m_se = re.search(r'(?i)S(\d{1,2})E(\d{1,3})', raw_q)
+    if m_se:
+        season = int(m_se.group(1))
+        episode = int(m_se.group(2))
+        clean_q = re.sub(r'(?i)S\d{1,2}E\d{1,3}', '', raw_q).strip()
+    else:
+        m_ar = re.search(r'(?:الموسم|موسم)\s*(\d{1,2}).*?(?:الحلقة|حلقة)\s*(\d{1,3})', raw_q)
+        if m_ar:
+            season = int(m_ar.group(1))
+            episode = int(m_ar.group(2))
+            clean_q = re.sub(r'(?:الموسم|موسم)\s*\d{1,2}.*?(?:الحلقة|حلقة)\s*\d{1,3}', '', raw_q).strip()
+        else:
+            clean_q = raw_q
+
+    clean_q = clean_query_term(clean_q)
+    media_type = 'tv' if (season is not None and episode is not None) else 'movie'
+    tmdb_id = None
+    matched_title = clean_q
+
     try:
-        sep = '&' if '?' in endpoint else '?'
-        url = f'{TMDB_BASE_URL}{endpoint}{sep}api_key={TMDB_API_KEY}&language={lang}'
-        res = requests.get(url, headers=TMDB_HEADERS, timeout=3.5)
-        if res.status_code != 200:
-            return []
-
-        items = []
-        is_movie = (media_type == 'movie')
-        for row in res.json().get('results', [])[:limit]:
-            if not row.get('poster_path'):
-                continue
-            title = (
-                row.get('title') or row.get('name')
-                or row.get('original_title') or row.get('original_name') or ''
-            )
-            orig_title = row.get('original_title') or row.get('original_name') or ''
-            date_val = row.get('release_date') if is_movie else row.get('first_air_date')
-            year_str = str(date_val)[:4] if date_val else '2026'
-            primary_tag = section_tag(badge_ar, lang) if badge_ar else 'TMDB'
-
-            items.append({
-                'id': str(row.get('id', '')),
-                'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(clean_query_term(orig_title or title))}",
-                'title': title,
-                'original_title': orig_title,
-                'poster': format_poster(row.get('poster_path')),
-                'backdrop': format_backdrop(row.get('backdrop_path') or row.get('poster_path')),
-                'rating': round(row.get('vote_average', 0), 1),
-                'tags': [primary_tag, year_str] if year_str else [primary_tag],
-                'type': 'movie' if is_movie else 'tv',
-            })
-        return items
+        s_url = f'{TMDB_BASE_URL}/search/{media_type}?api_key={TMDB_API_KEY}&query={quote(clean_q)}&language=en-US'
+        r = requests.get(s_url, headers=TMDB_HEADERS, timeout=4)
+        if r.status_code == 200:
+            results = r.json().get('results', [])
+            if results:
+                first = results[0]
+                tmdb_id = str(first.get('id', ''))
+                matched_title = first.get('title') or first.get('name') or first.get('original_title') or first.get('original_name') or clean_q
     except Exception as e:
-        print(f"⚠️ Home Section Fetch Error ({endpoint}): {e}")
-        return []
+        print(f'Global Search Bridge Error: {e}')
 
+    if not tmdb_id:
+        return '<html><body></body></html>', 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+    base_url = request.url_root.rstrip('/')
+    if base_url.startswith('http://') and 'localhost' not in base_url and '127.0.0.1' not in base_url:
+        base_url = 'https://' + base_url[len('http://'):]
+
+    watch_url = f'{base_url}/api/global-watch?provider={quote(provider)}&type={media_type}&id={tmdb_id}'
+    if season is not None and episode is not None:
+        watch_url += f'&s={season}&e={episode}'
+
+    safe_title = clean_query_term(matched_title)
+    html = (
+        '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>'
+        f'<a class="global-card" href="{watch_url}" title="{safe_title}">'
+        f'<img alt="{safe_title}" src=""/>{safe_title}</a>'
+        '</body></html>'
+    )
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+
+@app.route('/api/global-watch', methods=['GET'])
+def global_watch_bridge():
+    provider = request.args.get('provider', 'vidlink').strip().lower()
+    media_type = request.args.get('type', 'movie').strip().lower()
+    tmdb_id = request.args.get('id', '').strip()
+    season = request.args.get('s', '1').strip()
+    episode = request.args.get('e', '1').strip()
+
+    if not tmdb_id.isdigit():
+        return '<html><body></body></html>', 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+    if media_type == 'tv':
+        embed_map = {
+            'vidlink': f'https://vidlink.pro/tv/{tmdb_id}/{season}/{episode}',
+            'multiembed': f'https://multiembed.mov/?video_id={tmdb_id}&tmdb=1&s={season}&e={episode}',
+            '2embed': f'https://www.2embed.cc/embedtv/{tmdb_id}&s={season}&e={episode}',
+            'vidsrc-buzz': f'https://vidsrc.buzz/embed/tv/{tmdb_id}/{season}/{episode}',
+        }
+    else:
+        embed_map = {
+            'vidlink': f'https://vidlink.pro/movie/{tmdb_id}',
+            'multiembed': f'https://multiembed.mov/?video_id={tmdb_id}&tmdb=1',
+            '2embed': f'https://www.2embed.cc/embed/{tmdb_id}',
+            'vidsrc-buzz': f'https://vidsrc.buzz/embed/movie/{tmdb_id}',
+        }
+
+    iframe_src = embed_map.get(provider, embed_map['vidlink'])
+    html = (
+        '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>'
+        f'<iframe src="{iframe_src}" allowfullscreen></iframe>'
+        '</body></html>'
+    )
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+
+# ==============================================================================
+# 3. مسار الرئيسية (الأقسام الستة الغنية)
+# ==============================================================================
 
 @app.route('/api/home', methods=['GET'])
 def get_home():
-    # v3.1.47+ — لغة المحتوى (lang من التطبيق؛ الافتراضي ar-SA كما كان).
+    # v3.1.47 — لغة المحتوى (lang من التطبيق؛ الافتراضي ar-SA كما كان).
     lang = normalize_lang(request.args.get('lang', ''))
-    CACHE_KEY = f'home_data_v9:{lang}'
+    CACHE_KEY = f'home_data_v7:{lang}'
     cached = get_cached(CACHE_KEY)
     if cached is not None:
         return jsonify(cached)
 
     try:
-        # كل قسم يحمل see_all_params الكاملة لكي يمررها التطبيق إلى /api/catalog
-        # عند التمرير اللانهائي دون أي بيانات ثابتة داخل APK.
-        section_specs = [
-            # ── أقسام الأفلام (10 أقسام لا نهائية) ──
-            ('trending_movies', '🔥 الأفلام الأكثر شهرة', True,
-             {'type': 'movies', 'page': 1},
-             '/trending/movie/week', 'movie', None),
+        trending_movies = []
+        trending_tv = []
+        top_rated_movies = []
+        action_movies = []
+        family_animation = []
+        kdrama_series = []
 
-            ('now_playing_movies', '🎬 يعرض الآن في السينما', True,
-             {'type': 'movies', 'page': 1, 'filter': 'now_playing'},
-             '/movie/now_playing', 'movie', '🎬 يعرض الآن'),
+        try:
+            m_res = requests.get(
+                f'{TMDB_BASE_URL}/trending/movie/week?api_key={TMDB_API_KEY}&language={lang}',
+                headers=TMDB_HEADERS,
+                timeout=2.5
+            )
+            if m_res.status_code == 200:
+                trending_movies = [
+                    {
+                        'id': str(m.get('id', '')),
+                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(clean_query_term(m.get('original_title') or m.get('title', '')))}",
+                        'title': m.get('title') or m.get('original_title', ''),
+                        'original_title': m.get('original_title', ''),
+                        'poster': format_poster(m.get('poster_path')),
+                        'backdrop': format_backdrop(m.get('backdrop_path') or m.get('poster_path')),
+                        'rating': round(m.get('vote_average', 0), 1),
+                        'tags': ['TMDB', str(m.get('release_date', ''))[:4] if m.get('release_date') else '2026'],
+                        'type': 'movie',
+                    }
+                    for m in m_res.json().get('results', [])[:10]
+                    if m.get('poster_path')
+                ]
+        except Exception as e:
+            print(f"⚠️ Trending Movies Error: {e}")
 
-            ('top_rated_movies', '⭐ الأفلام الأعلى تقييماً', True,
-             {'type': 'movies', 'page': 1, 'sort_by': 'vote_average.desc'},
-             '/movie/top_rated', 'movie', '⭐ الأعلى تقييماً'),
+        try:
+            t_res = requests.get(
+                f'{TMDB_BASE_URL}/trending/tv/week?api_key={TMDB_API_KEY}&language={lang}',
+                headers=TMDB_HEADERS,
+                timeout=2.5
+            )
+            if t_res.status_code == 200:
+                trending_tv = [
+                    {
+                        'id': str(t.get('id', '')),
+                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(clean_query_term(t.get('original_name') or t.get('name', '')))}",
+                        'title': t.get('name') or t.get('original_name', ''),
+                        'original_title': t.get('original_name', ''),
+                        'poster': format_poster(t.get('poster_path')),
+                        'backdrop': format_backdrop(t.get('backdrop_path') or t.get('poster_path')),
+                        'rating': round(t.get('vote_average', 0), 1),
+                        'tags': ['TMDB', str(t.get('first_air_date', ''))[:4] if t.get('first_air_date') else '2026'],
+                        'type': 'tv',
+                    }
+                    for t in t_res.json().get('results', [])[:10]
+                    if t.get('poster_path')
+                ]
+        except Exception as e:
+            print(f"⚠️ Trending TV Error: {e}")
 
-            ('action_movies', '💥 قمة الأكشن والإثارة', True,
-             {'type': 'movies', 'page': 1, 'category': '28,53'},
-             '/discover/movie?with_genres=28,53&sort_by=popularity.desc', 'movie', '💥 أكشن'),
+        try:
+            top_res = requests.get(
+                f'{TMDB_BASE_URL}/movie/top_rated?api_key={TMDB_API_KEY}&language={lang}',
+                headers=TMDB_HEADERS,
+                timeout=2.5
+            )
+            if top_res.status_code == 200:
+                top_rated_movies = [
+                    {
+                        'id': str(m.get('id', '')),
+                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(clean_query_term(m.get('original_title') or m.get('title', '')))}",
+                        'title': m.get('title') or m.get('original_title', ''),
+                        'original_title': m.get('original_title', ''),
+                        'poster': format_poster(m.get('poster_path')),
+                        'backdrop': format_backdrop(m.get('backdrop_path') or m.get('poster_path')),
+                        'rating': round(m.get('vote_average', 0), 1),
+                        'tags': [section_tag('⭐ الأعلى تقييماً', lang), str(m.get('release_date', ''))[:4] if m.get('release_date') else ''],
+                        'type': 'movie',
+                    }
+                    for m in top_res.json().get('results', [])[:10]
+                    if m.get('poster_path')
+                ]
+        except Exception as e:
+            print(f"⚠️ Top Rated Error: {e}")
 
-            ('scifi_fantasy_movies', '🚀 خيال علمي وفانتازيا', True,
-             {'type': 'movies', 'page': 1, 'category': '878,14'},
-             '/discover/movie?with_genres=878,14&sort_by=popularity.desc', 'movie', '🚀 خيال علمي'),
+        try:
+            action_url = f'{TMDB_BASE_URL}/discover/movie?api_key={TMDB_API_KEY}&with_genres=28&sort_by=popularity.desc&language={lang}'
+            action_res = requests.get(action_url, headers=TMDB_HEADERS, timeout=2.5)
+            if action_res.status_code == 200:
+                action_movies = [
+                    {
+                        'id': str(m.get('id', '')),
+                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(clean_query_term(m.get('original_title') or m.get('title', '')))}",
+                        'title': m.get('title') or m.get('original_title', ''),
+                        'original_title': m.get('original_title', ''),
+                        'poster': format_poster(m.get('poster_path')),
+                        'backdrop': format_backdrop(m.get('backdrop_path') or m.get('poster_path')),
+                        'rating': round(m.get('vote_average', 0), 1),
+                        'tags': [section_tag('💥 أكشن', lang), str(m.get('release_date', ''))[:4] if m.get('release_date') else ''],
+                        'type': 'movie',
+                    }
+                    for m in action_res.json().get('results', [])[:10]
+                    if m.get('poster_path')
+                ]
+        except Exception as e:
+            print(f"⚠️ Action Movies Error: {e}")
 
-            ('horror_mystery_movies', '👻 رعب وغموض', True,
-             {'type': 'movies', 'page': 1, 'category': '27,9648'},
-             '/discover/movie?with_genres=27,9648&sort_by=popularity.desc', 'movie', '👻 رعب'),
+        try:
+            family_url = f'{TMDB_BASE_URL}/discover/movie?api_key={TMDB_API_KEY}&with_genres=16,10751&sort_by=popularity.desc&language={lang}'
+            family_res = requests.get(family_url, headers=TMDB_HEADERS, timeout=2.5)
+            if family_res.status_code == 200:
+                family_animation = [
+                    {
+                        'id': str(m.get('id', '')),
+                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(clean_query_term(m.get('original_title') or m.get('title', '')))}",
+                        'title': m.get('title') or m.get('original_title', ''),
+                        'original_title': m.get('original_title', ''),
+                        'poster': format_poster(m.get('poster_path')),
+                        'backdrop': format_backdrop(m.get('backdrop_path') or m.get('poster_path')),
+                        'rating': round(m.get('vote_average', 0), 1),
+                        'tags': [section_tag('🍿 عائلي', lang), str(m.get('release_date', ''))[:4] if m.get('release_date') else ''],
+                        'type': 'movie',
+                    }
+                    for m in family_res.json().get('results', [])[:10]
+                    if m.get('poster_path')
+                ]
+        except Exception as e:
+            print(f"⚠️ Family Animation Error: {e}")
 
-            ('comedy_movies', '😂 أفلام الكوميديا', True,
-             {'type': 'movies', 'page': 1, 'category': '35'},
-             '/discover/movie?with_genres=35&sort_by=popularity.desc', 'movie', '😂 كوميديا'),
+        try:
+            kdrama_url = f'{TMDB_BASE_URL}/discover/tv?api_key={TMDB_API_KEY}&with_original_language=ko&sort_by=popularity.desc&language={lang}'
+            kdrama_res = requests.get(kdrama_url, headers=TMDB_HEADERS, timeout=2.5)
+            if kdrama_res.status_code == 200:
+                kdrama_series = [
+                    {
+                        'id': str(t.get('id', '')),
+                        'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(clean_query_term(t.get('original_name') or t.get('name', '')))}",
+                        'title': t.get('name') or t.get('original_name', ''),
+                        'original_title': t.get('original_name', ''),
+                        'poster': format_poster(t.get('poster_path')),
+                        'backdrop': format_backdrop(t.get('backdrop_path') or t.get('poster_path')),
+                        'rating': round(t.get('vote_average', 0), 1),
+                        'tags': [section_tag('🌟 كوري', lang), str(t.get('first_air_date', ''))[:4] if t.get('first_air_date') else ''],
+                        'type': 'tv',
+                    }
+                    for t in kdrama_res.json().get('results', [])[:10]
+                    if t.get('poster_path')
+                ]
+        except Exception as e:
+            print(f"⚠️ KDrama Error: {e}")
 
-            ('drama_crime_movies', '🎭 دراما وجريمة', True,
-             {'type': 'movies', 'page': 1, 'category': '18,80'},
-             '/discover/movie?with_genres=18,80&sort_by=popularity.desc', 'movie', '🎭 دراما'),
+        # v12.1 (Phase 1 — Tiered Architecture): Akwam fallback removed.
+        # If TMDB returns empty trending lists (timeout/rate-limit),
+        # the server simply returns empty sections — the Android app
+        # handles empty data gracefully (no Akwam scraping on server).
 
-            ('family_animation', '🍿 سينما العائلة والأنيميشن', True,
-             {'type': 'movies', 'page': 1, 'category': '16,10751'},
-             '/discover/movie?with_genres=16,10751&sort_by=popularity.desc', 'movie', '🍿 عائلي'),
-
-            ('arabic_movies', '🇪🇬 أفلام عربية', True,
-             {'type': 'movies', 'page': 1, 'orig_lang': 'ar'},
-             '/discover/movie?with_original_language=ar&sort_by=popularity.desc', 'movie', '🇪🇬 عربي'),
-
-            # ── أقسام المسلسلات (8 أقسام لا نهائية) ──
-            ('trending_tv', '📺 المسلسلات الأكثر مشاهدة', True,
-             {'type': 'series', 'page': 1},
-             '/trending/tv/week', 'tv', None),
-
-            ('top_rated_tv', '🏆 المسلسلات الأعلى تقييماً', True,
-             {'type': 'series', 'page': 1, 'sort_by': 'vote_average.desc'},
-             '/tv/top_rated', 'tv', '🏆 مميز'),
-
-            ('action_scifi_tv', '⚡ مسلسلات أكشن وخيال علمي', True,
-             {'type': 'series', 'page': 1, 'category': '10759,10765'},
-             '/discover/tv?with_genres=10759,10765&sort_by=popularity.desc', 'tv', '⚡ مغامرة'),
-
-            ('crime_drama_tv', '🕵️ مسلسلات جريمة ودراما', True,
-             {'type': 'series', 'page': 1, 'category': '80,18'},
-             '/discover/tv?with_genres=80,18&sort_by=popularity.desc', 'tv', '🕵️ جريمة'),
-
-            ('anime_animation_tv', '🎌 أنمي وكرتون', True,
-             {'type': 'series', 'page': 1, 'category': '16'},
-             '/discover/tv?with_genres=16&sort_by=popularity.desc', 'tv', '🎌 أنمي'),
-
-            ('kdrama_series', '🌟 أعمال حصرية / مسلسلات كورية', True,
-             {'type': 'series', 'page': 1, 'orig_lang': 'ko'},
-             '/discover/tv?with_original_language=ko&sort_by=popularity.desc', 'tv', '🌟 كوري'),
-
-            ('turkish_series', '🇹🇷 مسلسلات تركية', True,
-             {'type': 'series', 'page': 1, 'orig_lang': 'tr'},
-             '/discover/tv?with_original_language=tr&sort_by=popularity.desc', 'tv', '🇹🇷 تركي'),
-
-            ('arabic_series', '🌙 مسلسلات عربية', True,
-             {'type': 'series', 'page': 1, 'orig_lang': 'ar'},
-             '/discover/tv?with_original_language=ar&sort_by=popularity.desc', 'tv', '🌙 عربي'),
+        sections_list = [
+            {
+                'key': 'trending_movies',
+                'title': '🔥 الأفلام الأكثر شهرة',
+                'has_see_all': True,
+                'see_all_params': {'type': 'movies', 'page': 1},
+                'items': trending_movies,
+            },
+            {
+                'key': 'trending_tv',
+                'title': '📺 المسلسلات الأكثر مشاهدة',
+                'has_see_all': True,
+                'see_all_params': {'type': 'series', 'page': 1},
+                'items': trending_tv,
+            }
         ]
 
-        # جلب جميع الأقسام بالتوازي لتسريع الاستجابة على Vercel (< 1.5 ثانية)
-        fetched_items = {}
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = {
-                executor.submit(
-                    _fetch_tmdb_section_items,
-                    spec[4], spec[5], lang, spec[6], 20
-                ): spec[0]
-                for spec in section_specs
-            }
-            for fut in futures:
-                sec_key = futures[fut]
-                try:
-                    fetched_items[sec_key] = fut.result()
-                except Exception:
-                    fetched_items[sec_key] = []
+        if top_rated_movies:
+            sections_list.append({
+                'key': 'top_rated_movies',
+                'title': '⭐ الأفلام الأعلى تقييماً',
+                'has_see_all': False,
+                'see_all_params': {},
+                'items': top_rated_movies,
+            })
 
-        sections_list = []
-        for key, ar_title, has_see_all, see_all_params, _, _, _ in section_specs:
-            items = fetched_items.get(key, [])
-            if items or key in ('trending_movies', 'trending_tv'):
-                sections_list.append({
-                    'key': key,
-                    'title': ar_title,
-                    'has_see_all': has_see_all,
-                    'see_all_params': see_all_params,
-                    'items': items,
-                })
+        if action_movies:
+            sections_list.append({
+                'key': 'action_movies',
+                'title': '💥 قمة الأكشن والإثارة',
+                'has_see_all': False,
+                'see_all_params': {},
+                'items': action_movies,
+            })
+
+        if family_animation:
+            sections_list.append({
+                'key': 'family_animation',
+                'title': '🍿 سينما العائلة والأنيميشن',
+                'has_see_all': False,
+                'see_all_params': {},
+                'items': family_animation,
+            })
+
+        if kdrama_series:
+            sections_list.append({
+                'key': 'kdrama_series',
+                'title': '🌟 أعمال حصرية / مسلسلات كورية',
+                'has_see_all': False,
+                'see_all_params': {},
+                'items': kdrama_series,
+            })
 
         # v3.1.47 — أسماء الأقسام بلغة الطلب (المفاتيح المعروفة فقط؛
         # أي قسم جديد من السيرفر يبقى بعنوانه الأصلي دون تحديث التطبيق).
@@ -691,121 +715,88 @@ def get_home():
 
 
 # ==============================================================================
-# 4. مسار الكتالوج والفلترة (يدعم التمرير اللانهائي لكل الأقسام: 40 عنصراً لكل طلب)
+# 4. مسار الكتالوج والفلترة
 # ==============================================================================
 
 @app.route('/api/catalog', methods=['GET'])
 def get_catalog():
-    """v13.3 (Infinite Sections): Catalog comes from TMDB Discover / Now Playing.
-    Each requested page fetches 2 consecutive TMDB pages (40 items) in parallel
-    and dynamically honors category (comma-separated genre IDs), orig_lang,
-    sort_by, filter, year, and legacy section codes sent from see_all_params.
+    """v12.1 (Phase 1 — Tiered Architecture): Catalog now comes from TMDB
+    Discover instead of scraping Akwam. The Android app code is unchanged
+    because the response shape is identical.
+
+    Filter mapping (legacy Akwam sections → TMDB language filter):
+      section=29 (Arabic)    → with_original_language=ar
+      section=30 (Foreign)   → no filter (any non-Arabic falls through)
+      section=31 (Indian)   → with_original_language=hi
+      section=32 (Turkish)   → with_original_language=tr
+      section=0  (All)       → no filter
+
+    Cache TTL extended to 24h (was 6h) because catalog data is stable.
     """
     cat_type = request.args.get('type', 'movies').lower()  # movies | series
     page = request.args.get('page', '1')
-    section = request.args.get('section', '').strip()
-    category = request.args.get('category', '').strip()  # e.g. '28' or '28,53'
-    orig_lang = request.args.get('orig_lang', '').strip().lower()  # e.g. 'ar', 'ko', 'tr'
-    sort_by = request.args.get('sort_by', '').strip()  # e.g. 'vote_average.desc'
-    catalog_filter = request.args.get('filter', '').strip().lower()  # e.g. 'now_playing'
-    year = request.args.get('year', '').strip()
-    quality = request.args.get('quality', '').strip()
+    section = request.args.get('section', '')
+    category = request.args.get('category', '')  # legacy: Akwam genre ID
+    year = request.args.get('year', '')
+    quality = request.args.get('quality', '')  # ignored — TMDB has no quality filter
     # v3.1.47 — لغة المحتوى (توجيه المالك) + مفتاح كاش لكل لغة.
     lang = normalize_lang(request.args.get('lang', ''))
 
-    cache_key = (
-        f'catalog:v3:{cat_type}:{page}:{section}:{category}:'
-        f'{orig_lang}:{sort_by}:{catalog_filter}:{year}:{lang}'
-    )
+    cache_key = f'catalog:{cat_type}:{page}:{section}:{category}:{year}:{lang}'
     cached = get_cached(cache_key)
     if cached is not None:
         return jsonify(cached)
 
     tmdb_type = 'movie' if cat_type == 'movies' else 'tv'
-    page_int = int(page) if str(page).isdigit() and int(page) > 0 else 1
 
-    use_now_playing = (catalog_filter == 'now_playing' and tmdb_type == 'movie')
-
-    # Build TMDB Discover base params
-    effective_sort = sort_by if sort_by else 'popularity.desc'
-    base_params = {
+    # Build TMDB Discover params
+    discover_params = {
         'api_key': TMDB_API_KEY,
         'language': lang,
-        'sort_by': effective_sort,
+        'page': page,
+        'sort_by': 'popularity.desc',
         'include_adult': 'false',
     }
-    if effective_sort == 'vote_average.desc':
-        base_params['vote_count.gte'] = '250'
 
-    # Original language: direct orig_lang param takes priority, fallback to legacy section map
+    # Section → with_original_language
     section_lang_map = {
         '29': 'ar',   # عربي
         '31': 'hi',   # هندي
         '32': 'tr',   # تركي
+        # '30' (أجنبي) و '0' (الكل) → بدون فلتر لغة
     }
-    resolved_orig_lang = orig_lang if re.match(r'^[a-z]{2}$', orig_lang) else section_lang_map.get(section, '')
-    if resolved_orig_lang:
-        base_params['with_original_language'] = resolved_orig_lang
+    if section in section_lang_map:
+        discover_params['with_original_language'] = section_lang_map[section]
 
-    # Category → with_genres (supports single '28' and comma-separated '28,53' TMDB genre IDs)
-    if category and re.match(r'^[\d,]+$', category):
-        base_params['with_genres'] = category
+    # Category → with_genres (TMDB genre IDs)
+    if category and category.isdigit():
+        discover_params['with_genres'] = category
 
     # Year filter
     if year and year.isdigit():
         if tmdb_type == 'movie':
-            base_params['primary_release_date.gte'] = f'{year}-01-01'
-            base_params['primary_release_date.lte'] = f'{year}-12-31'
+            discover_params['primary_release_date.gte'] = f'{year}-01-01'
+            discover_params['primary_release_date.lte'] = f'{year}-12-31'
         else:
-            base_params['first_air_date.gte'] = f'{year}-01-01'
-            base_params['first_air_date.lte'] = f'{year}-12-31'
-
-    def _fetch_discover_page(tmdb_page_num):
-        if use_now_playing:
-            np_params = {
-                'api_key': TMDB_API_KEY,
-                'language': lang,
-                'page': str(tmdb_page_num),
-            }
-            return requests.get(f'{TMDB_BASE_URL}/movie/now_playing', params=np_params, headers=TMDB_HEADERS, timeout=4)
-        params = dict(base_params)
-        params['page'] = str(tmdb_page_num)
-        discover_url = f'{TMDB_BASE_URL}/discover/{tmdb_type}'
-        return requests.get(discover_url, params=params, headers=TMDB_HEADERS, timeout=4)
+            discover_params['first_air_date.gte'] = f'{year}-01-01'
+            discover_params['first_air_date.lte'] = f'{year}-12-31'
 
     try:
-        tmdb_p1 = (page_int - 1) * 2 + 1
-        tmdb_p2 = tmdb_p1 + 1
+        discover_url = f'{TMDB_BASE_URL}/discover/{tmdb_type}'
+        res = requests.get(discover_url, params=discover_params, headers=TMDB_HEADERS, timeout=4)
+        if res.status_code != 200:
+            return jsonify({'status': 'error', 'message': f'TMDB returned {res.status_code}'}), 502
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            f1 = executor.submit(_fetch_discover_page, tmdb_p1)
-            f2 = executor.submit(_fetch_discover_page, tmdb_p2)
-            res1 = f1.result()
-            res2 = f2.result()
-
-        if res1.status_code != 200:
-            return jsonify({'status': 'error', 'message': f'TMDB returned {res1.status_code}'}), 502
-
-        data1 = res1.json()
-        raw_results = list(data1.get('results', []))
-        if res2.status_code == 200:
-            raw_results.extend(res2.json().get('results', []))
-
-        raw_total_pages = data1.get('total_pages', 1)
-        total_pages = max(1, (raw_total_pages + 1) // 2)
-        current_page = page_int
+        data = res.json()
+        results = data.get('results', [])
+        total_pages = data.get('total_pages', 1)
+        current_page = data.get('page', int(page))
 
         # Build items with the same shape as /api/home and the old Akwam parser
         items = []
-        seen_ids = set()
-        for r in raw_results:
+        for r in results:
             if not r.get('poster_path'):
                 continue  # skip items without posters
-            item_id = str(r.get('id', ''))
-            if item_id in seen_ids:
-                continue
-            seen_ids.add(item_id)
-
             title = r.get('title') or r.get('name') or r.get('original_title') or (
                 'Unavailable' if is_en(lang) else 'غير متوفر')
             orig_title = r.get('original_title') or r.get('original_name') or ''
@@ -813,7 +804,7 @@ def get_catalog():
             year_tag = date_field[:4] if date_field else ''
 
             items.append({
-                'id': item_id,
+                'id': str(r.get('id', '')),
                 'title': title,
                 'original_title': orig_title,
                 'url': f"{AKWAM_BASE_DOMAIN}/search?q={quote(clean_query_term(orig_title or title))}",
@@ -831,9 +822,6 @@ def get_catalog():
                 'filters': {
                     'section': section or 'all',
                     'category': category or 'all',
-                    'orig_lang': resolved_orig_lang or 'all',
-                    'sort_by': effective_sort,
-                    'filter': catalog_filter or 'all',
                     'year': year or 'all',
                     'quality': quality or 'all',
                 },
