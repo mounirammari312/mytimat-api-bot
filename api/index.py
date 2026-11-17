@@ -514,7 +514,7 @@ def get_config():
                 'name': 'vidlink',
                 'label': 'Vidlink',
                 'rank': 1,                     # رقم 1 للجميع (عربي وأجنبي)
-                'enabled': True,
+                'enabled': False,
                 'kind': 'tmdb_embed',          # يعمل بـ TMDB ID مباشرة
                 'parser': 'vidlink',           # {stream:{qualities,captions}}
                 'playback_mode': 'direct',     # MP4 خام — بلا بروكسي وبلا Referer
@@ -579,7 +579,7 @@ def get_config():
                 'name': 'vixsrc',
                 'label': 'Vixsrc',
                 'rank': 3,
-                'enabled': True,
+                'enabled': False,
                 'kind': 'tmdb_embed',
                 'parser': 'vixsrc',
                 'playback_mode': 'direct',     # master m3u8 يحمل tokenه في الرابط
