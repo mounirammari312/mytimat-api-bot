@@ -1,4 +1,5 @@
 
+
 import os
 import time
 from urllib.parse import quote, unquote, urlparse
@@ -302,13 +303,13 @@ def fetch_tmdb_series_meta(clean_tmdb_id, lang='ar-SA'):
 def index():
     return jsonify({
         'status': 'online',
-        'mode': 'Tiered Architecture (Phase 1) — TMDB-only metadata + Android-side scraping (v13.3: global stream providers config)',
+        'mode': 'Tiered Architecture (Phase 1) — TMDB-only metadata + Android-side scraping (v13.4: global stream providers config (generic engine))',
         'tls_impersonate': 'Chrome 124 (Active)' if HAS_CURL_CFFI else 'Standard Requests',
         'active_domains': {
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '13.3.0-StreamProviders',
+        'version': '13.4.0-GlobalEngine',
     })
 
 
@@ -347,7 +348,7 @@ def get_config():
 
     return jsonify({
         'status': 'success',
-        'version': '13.3.0-StreamProviders',
+        'version': '13.4.0-GlobalEngine',
         'providers': [
             {
                 'name': 'akwam',
@@ -484,7 +485,7 @@ def get_config():
         ],
 
         # ======================================================================
-        # v13.3 — GLOBAL STREAM PROVIDERS (إعدادات فقط — لا كشط على السيرفر)
+        # v13.4 — GLOBAL STREAM PROVIDERS (إعدادات فقط — لا كشط على السيرفر)
         # ======================================================================
         # معمارية Tiered: التطبيق يستخرج الروابط محلياً على جهاز المستخدم؛
         # السيرفر يسلمه «وصفة» كل مزود عالمي فقط (روابط API + ترويسات + رتبة).
@@ -494,6 +495,21 @@ def get_config():
         # ⚠️ قاعدة CDN حاسمة (شُخّصت 2026-11-16): روابط فيديو Vidlink
         #    (bcdn.hakunaymatata.com) تحظر UA المتصفحات (428/429) وتحظر
         #    Referer مطلقاً — لذا headers التشغيل = UA مشغّل فقط وبلا Referer.
+        #
+        # v13.4 — حقول المحرك العام (GlobalStreamEngine v2 في التطبيق v3.1.66):
+        #   parser:        'vidlink'  → {stream:{qualities:{...},captions:[...]}}
+        #                  'sources'  → {sources:[{url,quality,subtitles?}]}
+        #                  'vixsrc'   → {src:"/..."} ثم صفحة token+url
+        #   playback_mode: 'direct'   → الروابط تلعب خاماً بترويساتها كما هي
+        #                  'proxy'    → عبر HlsProxy المحلي (Referer/Origin/UA
+        #                               يُحقن على كل مقطع — لمزودي m3u8)
+        #   decrypt_api:   باب فك التشفير في enc-dec (POST {text,id,seed})
+        #                  للروابط المشفرة (عائلة Videasy) — يبقى التشفير
+        #                  مسؤولية enc-dec لا التطبيق.
+        #   extra_movie_apis / extra_tv_apis: مسارات سيرفرات إضافية لنفس
+        #                  المزود تُدمج نتائجها (Videasy: cdn+lamovie+meine).
+        #   المتغيرات المتاحة في القوالب: {tmdb} {enc} {seed} {title} {year}
+        #                  {imdb} {season} {episode}
         'stream_providers': [
             {
                 'name': 'vidlink',
@@ -501,6 +517,8 @@ def get_config():
                 'rank': 1,                     # رقم 1 للجميع (عربي وأجنبي)
                 'enabled': True,
                 'kind': 'tmdb_embed',          # يعمل بـ TMDB ID مباشرة
+                'parser': 'vidlink',           # {stream:{qualities,captions}}
+                'playback_mode': 'direct',     # MP4 خام — بلا بروكسي وبلا Referer
                 # تشفير الـ TMDB ID (EncDecEndpoints — مجاني، 75 طلب/ث)
                 'enc_api': 'https://enc-dec.app/api/enc-vidlink?text={tmdb}',
                 # JSON الروابط: {stream:{qualities:{"1080":{url,codecName,size},...},captions:[{language,url,type}]}}
@@ -517,13 +535,53 @@ def get_config():
                 'cache_ttl_sec': 3600,
             },
             {
+                # Videasy (10 سيرفرات خلف API واحد: cdn/lamovie/meine)
+                # ⚠️ حالة النطاق 2026-11-17: نطاق المشغل videasy.to ميت عالمياً
+                #    (Lame Delegation — خوادم أسمائه ترفض الاستجابة) وAPI
+                #    api.wecollege.net خلف Cloudflare يرفض IP مراكز البيانات.
+                #    الوصفة كاملة والمحرك يدعمها 100% — عند عودة النطاق:
+                #    جرّب من هاتف حقيقي ثم فعّل enabled=True من هنا فقط.
+                'name': 'videasy',
+                'label': 'Videasy',
+                'rank': 2,
+                'enabled': True,
+                'kind': 'tmdb_embed',
+                'parser': 'sources',           # {sources:[{url,quality}]}
+                'playback_mode': 'proxy',      # m3u8 يحتاج Referer/Origin على كل مقطع
+                # الخطوة 1: seed (يرجع {"seed":"..."}) — من جهاز المستخدم
+                'enc_api': 'https://api.wecollege.net/seed?mediaId={tmdb}',
+                # الخطوة 2: الروابط المشفرة (نص base64url) — النطاق قابل للتدوير من هنا
+                'movie_api': 'https://api.wecollege.net/cdn/sources-with-title?title={title}&mediaType=Movie&year={year}&tmdbId={tmdb}&imdbId={imdb}&enc=2&seed={seed}',
+                'extra_movie_apis': [
+                    'https://api.wecollege.net/lamovie/sources-with-title?title={title}&mediaType=Movie&year={year}&tmdbId={tmdb}&imdbId={imdb}&enc=2&seed={seed}',
+                    'https://api.wecollege.net/meine/sources-with-title?title={title}&mediaType=Movie&year={year}&tmdbId={tmdb}&imdbId={imdb}&enc=2&seed={seed}',
+                ],
+                'tv_api': 'https://api.wecollege.net/cdn/sources-with-title?title={title}&mediaType=TV%20Series&year={year}&tmdbId={tmdb}&imdbId={imdb}&seasonId={season}&episodeId={episode}&enc=2&seed={seed}',
+                'extra_tv_apis': [
+                    'https://api.wecollege.net/lamovie/sources-with-title?title={title}&mediaType=TV%20Series&year={year}&tmdbId={tmdb}&imdbId={imdb}&seasonId={season}&episodeId={episode}&enc=2&seed={seed}',
+                ],
+                # الخطوة 3: فك التشفير عبر باب enc-dec (POST {text,id,seed})
+                'decrypt_api': 'https://enc-dec.app/api/dec-videasy',
+                # ترويسات التشغيل: هوية متصفح + Referer/Origin المشغل
+                'playback_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                    'Referer': 'https://player.videasy.net/',
+                    'Origin': 'https://player.videasy.net',
+                },
+                'fetch_user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'timeout_ms': 8000,
+                'cache_ttl_sec': 1800,
+            },
+            {
+                # Vixsrc — m3u8 خلف Cloudflare (يعمل من IP المنازل لا مراكز البيانات)
+                # الوصفة مختبرة المنطق في البحث السابق (src → صفحة → token+url)
                 'name': 'vixsrc',
                 'label': 'Vixsrc',
-                'rank': 2,
-                # معطّل افتراضياً: محمي Cloudflare من IP مراكز البيانات؛
-                # فعّله من اللوحة بعد التحقق من تشغيله من أجهزة المستخدمين.
-                'enabled': False,
+                'rank': 3,
+                'enabled': True,
                 'kind': 'tmdb_embed',
+                'parser': 'vixsrc',
+                'playback_mode': 'direct',     # master m3u8 يحمل tokenه في الرابط
                 'enc_api': '',
                 'movie_api': 'https://vixsrc.to/api/movie/{tmdb}',
                 'tv_api': 'https://vixsrc.to/api/tv/{tmdb}/{season}/{episode}',
