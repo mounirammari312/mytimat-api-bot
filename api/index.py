@@ -544,7 +544,7 @@ def get_config():
                 'name': 'videasy',
                 'label': 'Videasy',
                 'rank': 2,
-                'enabled': True,
+                'enabled': False,
                 'kind': 'tmdb_embed',
                 'parser': 'sources',           # {sources:[{url,quality}]}
                 'playback_mode': 'proxy',      # m3u8 يحتاج Referer/Origin على كل مقطع
