@@ -1,5 +1,4 @@
 
-
 import os
 import time
 from urllib.parse import quote, unquote, urlparse
@@ -303,13 +302,13 @@ def fetch_tmdb_series_meta(clean_tmdb_id, lang='ar-SA'):
 def index():
     return jsonify({
         'status': 'online',
-        'mode': 'Tiered Architecture (Phase 1) — TMDB-only metadata + Android-side scraping (v13.6: staged vidfast/vidcore recipes + vixsrc live)',
+        'mode': 'Tiered Architecture (Phase 1) — TMDB-only metadata + Android-side scraping (v13.5: hybrid catalog rows + vidfast/vidcore staged recipes)',
         'tls_impersonate': 'Chrome 124 (Active)' if HAS_CURL_CFFI else 'Standard Requests',
         'active_domains': {
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '13.6.0-StagedProviders',
+        'version': '13.5.0-HybridCatalog',
     })
 
 
@@ -348,7 +347,7 @@ def get_config():
 
     return jsonify({
         'status': 'success',
-        'version': '13.6.0-StagedProviders',
+        'version': '13.5.0-HybridCatalog',
         'providers': [
             {
                 'name': 'akwam',
@@ -573,11 +572,10 @@ def get_config():
                 'cache_ttl_sec': 1800,
             },
             {
-                # Vixsrc — m3u8 خلف Cloudflare: يعمل من IP المنازل
-                # (أي من أجهزة المستخدمين) ويرفض 403 لـ IP مراكز
-                # البيانات فقط — والتطبيق يحلها على جهاز
-                # المستخدم مباشرة، لذا التفعيل آمن (v13.6).
+                # Vixsrc — m3u8 خلف Cloudflare (يعمل من IP المنازل لا مراكز البيانات)
                 # الوصفة مختبرة المنطق في البحث السابق (src → صفحة → token+url)
+                # v13.5: مفعّل بتوجيه المالك (2026-11-17) — الاستخراج محلي من
+                # هاتف المستخدم؛ 403 من مراكز البيانات طبيعي ومتوقع.
                 'name': 'vixsrc',
                 'label': 'Vixsrc',
                 'rank': 3,
@@ -594,71 +592,171 @@ def get_config():
                 'cache_ttl_sec': 3600,
             },
             {
-                # ── v13.6 — VIDFAST (rank 4): العائلة المرحلية ──
-                # السلم الكامل مدموج في محرك التطبيق منذ v3.1.67
-                # (resolveVidfastStaged): صفحة embed ← مقعد en/token ←
-                # باب enc-dec (stage=1) ← POST مرحلة 1 (CSRF) ← باب
-                # enc-dec (stage=2) ← POST السيرفرات ← باب dec ← قائمة
-                # السيرفرات ← POST {stream}/{data} لكل سيرفر ← باب dec ←
-                # الحزمة النهائية (sources grammar).
-                # يعمل من أجهزة المستخدمين فقط: POSTات المراحل ترفض IP
-                # مراكز البيانات بـ404 مزيفة — نفس وضعية Vixsrc.
-                # مُختبر حياً 2026-11-17: صفحة embed 200 + البابان
-                # يستجيبان للعقد الموثق (text + stage).
+                # ==============================================================
+                # v13.5 — VIDFAST (rank 4, مفعّل بتوجيه المالك 2026-11-17)
+                #
+                # تدفّق المراحل (موثّق من EncDecEndpoints/samples + فحصنا الحي
+                # 2026-11-17: صفحة المشغّل حيّة وتسلّم en/token من أي IP؛
+                # POST المرحلة الأولى يرفض IP مراكز البيانات بـ 404 زائف
+                # تماماً كسلوك Vixsrc — التنفيذ محلي على هاتف المستخدم):
+                #   1) GET  movie_api/tv_api (صفحة المشغّل) → استخراج en/token
+                #      عبر token_regex (GET بلا X-Requested-With وإلا 403!)
+                #   2) GET  enc_api?text={token}&stage=1 → {stage1: url, token}
+                #   3) POST stage1 (Referer + XRW + X-Csrf-Token) → نص مشفّر
+                #   4) GET  stage2_api?text={stage1}&stage=2 → {servers, stream, token}
+                #   5) POST servers → نص → decrypt_api → [{data}, ...]
+                #   6) POST {stream}/{data} لكل سيرفر → نص → decrypt_api →
+                #      JSON نهائي تقرؤه قاعدة "sources"
+                # parser: 'vidfast' = القاعدة المرحلية العامة (المحرك v3.1.67)
+                # ==============================================================
                 'name': 'vidfast',
                 'label': 'Vidfast',
                 'rank': 4,
                 'enabled': True,
                 'kind': 'tmdb_embed',
-                'parser': 'vidfast',           # السلم المرحلي في المحرك
-                'playback_mode': 'proxy',      # m3u8 يحتاج Referer على كل مقطع
-                # الباب الأول: نص enc-dec يُغذّى بمقعد en/token من الصفحة
-                # (وليس بـ tmdb — المحرك يستثني هذه العائلة من التشفير المعتاد)
+                'parser': 'vidfast',           # القاعدة المرحلية (stage1 → stage2 → dec)
+                'playback_mode': 'proxy',      # m3u8 يحتاج Referer/Origin على كل مقطع
+                'movie_api': 'https://vidfast.vc/movie/{tmdb}',
+                'tv_api': 'https://vidfast.vc/tv/{tmdb}/{season}/{episode}',
                 'enc_api': 'https://enc-dec.app/api/enc-vidfast?text={token}&stage=1',
                 'stage2_api': 'https://enc-dec.app/api/enc-vidfast?text={stage1}&stage=2',
                 'decrypt_api': 'https://enc-dec.app/api/dec-vidfast',
-                # صفحة المشغل (الـ embed) — القالب يتضمن tmdb مباشرة
-                'movie_api': 'https://vidfast.vc/movie/{tmdb}/',
-                'tv_api': 'https://vidfast.vc/tv/{tmdb}/{season}/{episode}/',
-                # مقعد en/token: fallbackات المحرك المدمجة تغطيه (الخانة فارغة عمداً
-                # لتفادي أخطاء الإفلات المزدوج في JSON)
-                'token_regex': '',
+                # استخراج en/token من HTML صفحة المشغّل (RSC المهرّب)
+                'token_regex': r'\\"(?:en|token)\\":\\"(.*?)\\"',
                 'fetch_referer': 'https://vidfast.vc/',
                 'playback_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                     'Referer': 'https://vidfast.vc/',
+                    'Origin': 'https://vidfast.vc',
                 },
-                'fetch_user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                'timeout_ms': 15000,           # سلم كامل: 3 POSTات + بابان + الصفحة
+                'fetch_user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
+                'timeout_ms': 12000,
                 'cache_ttl_sec': 1800,
             },
             {
-                # ── v13.6 — VIDCORE (rank 5): التوأم نفسه على vidcore.io ──
-                # نفس السلم المرحلي حرفياً (نفس عائلة المشغل) — كل الفروق
-                # نطاقات: الصفحة والأبواب والـ Referer.
+                # v13.5 — VIDCORE (rank 5, مفعّل): نفس تدفّق vidfast حرفياً
+                # (نفس بنية المشغّل Next.js — عائلة واحدة) بنطاق وأبواب
+                # enc-dec خاصة به. فُحص حياً 2026-11-17: الصفحة حيّة وتسلّم
+                # token، والمرحلة الأولى ترفض IP المركز بأخطاء 404 زائفة —
+                # يعمل محلياً من هاتف المستخدم.
                 'name': 'vidcore',
                 'label': 'Vidcore',
                 'rank': 5,
                 'enabled': True,
                 'kind': 'tmdb_embed',
-                'parser': 'vidfast',
+                'parser': 'vidfast',           # نفس القاعدة المرحلية العامة
                 'playback_mode': 'proxy',
+                'movie_api': 'https://vidcore.io/movie/{tmdb}',
+                'tv_api': 'https://vidcore.io/tv/{tmdb}/{season}/{episode}',
                 'enc_api': 'https://enc-dec.app/api/enc-vidcore?text={token}&stage=1',
                 'stage2_api': 'https://enc-dec.app/api/enc-vidcore?text={stage1}&stage=2',
                 'decrypt_api': 'https://enc-dec.app/api/dec-vidcore',
-                'movie_api': 'https://vidcore.io/movie/{tmdb}/',
-                'tv_api': 'https://vidcore.io/tv/{tmdb}/{season}/{episode}/',
-                'token_regex': '',
+                'token_regex': r'\\"(?:en|token)\\":\\"(.*?)\\"',
                 'fetch_referer': 'https://vidcore.io/',
                 'playback_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                     'Referer': 'https://vidcore.io/',
+                    'Origin': 'https://vidcore.io',
                 },
-                'fetch_user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                'timeout_ms': 15000,
+                'fetch_user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
+                'timeout_ms': 12000,
                 'cache_ttl_sec': 1800,
             },
         ],
+
+        # ======================================================================
+        # v13.5 — HYBRID CATALOG (الموجة 2: المحتوى العربي/التركي)
+        # ======================================================================
+        # معمارية متفق عليها (2026-11-17): السيرفر لا يكشط أبداً — يسلّم
+        # التطبيق «خريطة الصفوف» فقط (مزود + مسار + فلتر عنوان + حد)،
+        # والتطبيق يكشط محلياً من جهاز المستخدم ثم يطابق عكسياً مع TMDB
+        # عبر /api/search (بطاقة مطابقة = هوية TMDB كاملة: بوستر/تقييم/
+        # تشغيل بالمزودين العالميين؛ غير مطابقة = بطاقة المزود كما هي).
+        # النتيجة تُخزَّن جماعياً عبر /api/page-cache (مفتاح hybrid:...)
+        # فيصل المستخدم التالي فورياً بلا كشط.
+        #
+        # الحقول:
+        #   title_filter : regex على عنوان البطاقة الخام ليصطفّ نوع الصف
+        #   title_exclude: regex استبعاد (مترجم/مدبلج عن الصف العربي...)
+        #   type         : series | movies (نوع القسم في التطبيق)
+        #   providers[]  : name = مفتاح مزود في providers[] أعلاه،
+        #                  path = مسار الكتالوج (متغير {page} متاح)
+        #   title_clean  : regexات إزالة الزوايد (مشاهدة/فيلم/الحلقة NN...)
+        # كل شيء قابل للتعديل من هنا بلا APK: إضافة صف، تدوير مسار،
+        # تعطيل مزود داخل صف، أو رفع/خفض الحدود.
+        #
+        # حالة المزودين (فحص حي 2026-11-17):
+        #   qfilm   : حي — category.php?cat= يفلتر فعلاً (الحاوية
+        #             ul.pm-ul-browse-videos)، بوسترات data-echo مطلقة.
+        #   larroza : حي — newvideos1.php يجلب المسلسلات التركية/المدبلجة
+        #             والعربية بحلقاتها (يُدمج العنوان المنظّف للتكرار).
+        #   akwam   : ميت — الدومين انتهى (expireddomains)؛ مُستبعد.
+        'hybrid_catalog': {
+            'enabled': True,
+            'tmdb_match': True,          # المطابقة العكسية مع TMDB مفعّلة
+            'match_limit': 20,           # أقصى بطاقات تُطابق لكل صف (Budget)
+            'row_item_limit': 20,        # أقصى بطاقة في الصف بعد الدمج
+            'cache_ttl_sec': 12 * 3600,  # صلاحية كاش الصف الجماعي
+            'search_provider_limit': 10, # حد بطاقات البحث الموحّد للمزودين
+            # تنظيف عناوين البطاقات قبل مطابقة TMDB (يُطبَّق بالترتيب)
+            'title_clean': [
+                r'^مشاهدة\s+',
+                r'^(مسلسل|فيلم|انمي|أنمي)\s+',
+                r'\s+الحلقة\s+\S+.*$',
+                r'\s+الموسم\s+\S+.*$',
+                r'\s*\(\d{4}\)\s*',
+                r'\s+(كامل|كاملة|جميع الحلقات|اون لاين|أون لاين|مترجم|مترجمة|مدبلج|مدبلجة|بالمصري|HD|4K|HD264|webrip|بجودة عالية)\s*$',
+                r'\s+(كامل|كاملة|جميع الحلقات|اون لاين|أون لاين|مترجم|مترجمة|مدبلج|مدبلجة|بالمصري|HD|4K|webdl|blu-ray)\b',
+            ],
+            'rows': [
+                {
+                    'key': 'arabic_series',
+                    'title_ar': 'مسلسلات عربية',
+                    'title_en': 'Arabic Series',
+                    'type': 'series',
+                    'title_filter': r'مسلسل',
+                    'title_exclude': r'مترجم|مدبلج|تركي',
+                    'providers': [
+                        {'name': 'larroza', 'path': '/newvideos1.php?page={page}'},
+                    ],
+                },
+                {
+                    'key': 'arabic_movies',
+                    'title_ar': 'أفلام عربية',
+                    'title_en': 'Arabic Movies',
+                    'type': 'movies',
+                    'title_filter': r'فيلم',
+                    'title_exclude': r'مترجم|مدبلج',
+                    'providers': [
+                        {'name': 'qfilm', 'path': '/category.php?cat=aflam-araby&page={page}'},
+                        {'name': 'larroza', 'path': '/newvideos1.php?page={page}'},
+                    ],
+                },
+                {
+                    'key': 'turkish_drama',
+                    'title_ar': 'دراما تركية',
+                    'title_en': 'Turkish Drama',
+                    'type': 'series',
+                    'title_filter': r'مسلسل.*مترجم',
+                    'title_exclude': r'',
+                    'providers': [
+                        {'name': 'larroza', 'path': '/newvideos1.php?page={page}'},
+                    ],
+                },
+                {
+                    'key': 'dubbed',
+                    'title_ar': 'مدبلج',
+                    'title_en': 'Dubbed',
+                    'type': 'movies',
+                    'title_filter': r'مدبلج',
+                    'title_exclude': r'',
+                    'providers': [
+                        {'name': 'qfilm', 'path': '/category.php?cat=dubbed-movies&page={page}'},
+                        {'name': 'larroza', 'path': '/newvideos1.php?page={page}'},
+                    ],
+                },
+            ],
+        },
     })
 
 
@@ -1385,20 +1483,26 @@ def handle_page_cache():
         # v13.3 — THE GLOBAL-PROVIDER BUNDLE SEAT: حملة كائن `data` يُخزَّن
         # كما هو (حزمة سيرفرات+ترجمات مزود عالمي كاملة — Vidlink)؛ GET
         # يعيدة داخل data. القديم الذي لا يرسل data يعمل بلا أي تغيير.
+        # v13.5 — THE HYBRID-ROW BUNDLE SEAT: صفوف الكتالوج الهجين تُخزَّن
+        # بنفس المقعد دون url إلزامي (url يصبح '')؛ وttl اختياري من المتصل
+        # (افتراضي 48 ساعة — الصفوف الهجينة تطلب 12 ساعة كي تتجدد سريعاً).
         bundle = data.get('data') if isinstance(data.get('data'), dict) else None
 
-        if cache_key and target_url:
+        if cache_key and (target_url or bundle is not None):
             payload = {
-                'url': target_url,
+                'url': target_url or '',
                 'referer': referer,
                 'source': source,
                 'cached_at': int(time.time())
             }
             if bundle is not None:
                 payload['data'] = bundle
-            # حفظ الرابط مع الترويسات لمدة 48 ساعة (الباقة تتحقق من صلاحية
-            # التوكن بنفسها عند القراءة — sign=&t= داخل كل رابط)
-            set_cached(f"page:v2:{cache_key}", payload, ttl=48 * 3600)
+            ttl = data.get('ttl')
+            if not isinstance(ttl, int) or ttl <= 0:
+                ttl = 48 * 3600
+            # حفظ الرابط مع الترويسات (الباقة تتحقق من صلاحية التوكن
+            # بنفسها عند القراءة — sign=&t= داخل كل رابط)
+            set_cached(f"page:v2:{cache_key}", payload, ttl=ttl)
             return jsonify({'status': 'success', 'message': 'Stream payload cached successfully'})
 
         return jsonify({'status': 'error', 'message': 'Invalid payload'}), 400
@@ -1406,4 +1510,5 @@ def handle_page_cache():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
+
 
