@@ -1,4 +1,5 @@
 
+
 import os
 import time
 from urllib.parse import quote, unquote, urlparse
@@ -70,6 +71,33 @@ TMDB_HEADERS = {
     ),
     'Accept': 'application/json',
 }
+
+
+TMDB_RETRY_MAX_WAIT = 1.5  # seconds
+
+
+def tmdb_get(url, params=None, timeout=4):
+    """TMDB request with one polite retry on 429/5xx."""
+    try:
+        res = requests.get(url, params=params, headers=TMDB_HEADERS, timeout=timeout)
+    except Exception as e:
+        print(f"⚠️ TMDB request error ({url}): {e}")
+        return None
+
+    if res.status_code == 429 or res.status_code >= 500:
+        wait = TMDB_RETRY_MAX_WAIT
+        try:
+            ra = float(res.headers.get('Retry-After', '0') or 0)
+            wait = max(0.2, min(ra, TMDB_RETRY_MAX_WAIT))
+        except (ValueError, TypeError):
+            pass
+        time.sleep(wait)
+        try:
+            res = requests.get(url, params=params, headers=TMDB_HEADERS, timeout=timeout)
+        except Exception as e:
+            print(f"⚠️ TMDB retry error: {e}")
+            return None
+    return res
 
 # v12.2.7: Larroza's old domain redirects through 9 hops to llaroza.click.
 # Direct domain avoids the redirect chain.
@@ -186,7 +214,9 @@ def get_vault_session(site_key, target_url):
                 "Referer": f"{target_url.rstrip('/')}/"
             }
 
-            set_cached(cache_key, vault_data, ttl=2 * 3600)
+                        # v13.6: 45 دقيقة بدل ساعتين — جلسة ميتة كانت تعطّل الكشط
+            # على أجهزة كل المستخدمين حتى ساعتين كاملتين.
+            set_cached(cache_key, vault_data, ttl=45 * 60)
             return vault_data
     except Exception as e:
         print(f"⚠️ Vault Session Error for {site_key}: {e}")
@@ -308,7 +338,7 @@ def index():
             'akwam': AKWAM_BASE_DOMAIN,
             'larroza': LARROZA_BASE_DOMAIN,
         },
-        'version': '13.5.0-HybridCatalog',
+        'version': '13.6.0-HardenedCache',
     })
 
 
@@ -347,7 +377,7 @@ def get_config():
 
     return jsonify({
         'status': 'success',
-        'version': '13.5.0-HybridCatalog',
+        'version': '13.6.0-HardenedCache',
         'providers': [
             {
                 'name': 'akwam',
@@ -708,8 +738,15 @@ def get_config():
                 r'\s+(كامل|كاملة|جميع الحلقات|اون لاين|أون لاين|مترجم|مترجمة|مدبلج|مدبلجة|بالمصري|HD|4K|HD264|webrip|بجودة عالية)\s*$',
                 r'\s+(كامل|كاملة|جميع الحلقات|اون لاين|أون لاين|مترجم|مترجمة|مدبلج|مدبلجة|بالمصري|HD|4K|webdl|blu-ray)\b',
             ],
-            'rows': [
+
+
+
+            
+           'rows': [
                 {
+                    # v13.6: مسار المسلسلات المخصص بدل خلاطة newvideos1 —
+                    # كان الفلتر العربي ينجو منها بـ5-10 بطاقات فقط لكل
+                    # صفحة (سبب بطاقات 5-6) + qfilm كمزود ثانٍ.
                     'key': 'arabic_series',
                     'title_ar': 'مسلسلات عربية',
                     'title_en': 'Arabic Series',
@@ -717,7 +754,8 @@ def get_config():
                     'title_filter': r'مسلسل',
                     'title_exclude': r'مترجم|مدبلج|تركي',
                     'providers': [
-                        {'name': 'larroza', 'path': '/newvideos1.php?page={page}'},
+                        {'name': 'larroza', 'path': '/moslslat4.php?page={page}'},
+                        {'name': 'qfilm', 'path': '/moslslat.php?page={page}'},
                     ],
                 },
                 {
@@ -733,6 +771,8 @@ def get_config():
                     ],
                 },
                 {
+                    # يبقى على newvideos1 عمداً: خلاطة المختلط هي المصدر
+                    # الصحيح للفلتر الانتقائي (مسلسل.*مترجم) — موثق حياً.
                     'key': 'turkish_drama',
                     'title_ar': 'دراما تركية',
                     'title_en': 'Turkish Drama',
@@ -756,8 +796,21 @@ def get_config():
                     ],
                 },
             ],
+        
+        
         },
+        
+
+
+
+
+        
     })
+
+
+
+
+
 
 
 # ==============================================================================
@@ -782,12 +835,11 @@ def get_home():
         kdrama_series = []
 
         try:
-            m_res = requests.get(
+            m_res = tmdb_get(
                 f'{TMDB_BASE_URL}/trending/movie/week?api_key={TMDB_API_KEY}&language={lang}',
-                headers=TMDB_HEADERS,
                 timeout=2.5
             )
-            if m_res.status_code == 200:
+            if m_res is not None and m_res.status_code == 200:
                 trending_movies = [
                     {
                         'id': str(m.get('id', '')),
@@ -807,12 +859,11 @@ def get_home():
             print(f"⚠️ Trending Movies Error: {e}")
 
         try:
-            t_res = requests.get(
+            t_res = tmdb_get(
                 f'{TMDB_BASE_URL}/trending/tv/week?api_key={TMDB_API_KEY}&language={lang}',
-                headers=TMDB_HEADERS,
                 timeout=2.5
             )
-            if t_res.status_code == 200:
+            if t_res is not None and t_res.status_code == 200:
                 trending_tv = [
                     {
                         'id': str(t.get('id', '')),
@@ -832,12 +883,11 @@ def get_home():
             print(f"⚠️ Trending TV Error: {e}")
 
         try:
-            top_res = requests.get(
+            top_res = tmdb_get(
                 f'{TMDB_BASE_URL}/movie/top_rated?api_key={TMDB_API_KEY}&language={lang}',
-                headers=TMDB_HEADERS,
                 timeout=2.5
             )
-            if top_res.status_code == 200:
+            if top_res is not None and top_res.status_code == 200:
                 top_rated_movies = [
                     {
                         'id': str(m.get('id', '')),
@@ -858,8 +908,8 @@ def get_home():
 
         try:
             action_url = f'{TMDB_BASE_URL}/discover/movie?api_key={TMDB_API_KEY}&with_genres=28&sort_by=popularity.desc&language={lang}'
-            action_res = requests.get(action_url, headers=TMDB_HEADERS, timeout=2.5)
-            if action_res.status_code == 200:
+            action_res = tmdb_get(action_url, timeout=2.5)
+            if action_res is not None and action_res.status_code == 200:
                 action_movies = [
                     {
                         'id': str(m.get('id', '')),
@@ -880,8 +930,8 @@ def get_home():
 
         try:
             family_url = f'{TMDB_BASE_URL}/discover/movie?api_key={TMDB_API_KEY}&with_genres=16,10751&sort_by=popularity.desc&language={lang}'
-            family_res = requests.get(family_url, headers=TMDB_HEADERS, timeout=2.5)
-            if family_res.status_code == 200:
+            family_res = tmdb_get(family_url, timeout=2.5)
+            if family_res is not None and family_res.status_code == 200:
                 family_animation = [
                     {
                         'id': str(m.get('id', '')),
@@ -902,8 +952,8 @@ def get_home():
 
         try:
             kdrama_url = f'{TMDB_BASE_URL}/discover/tv?api_key={TMDB_API_KEY}&with_original_language=ko&sort_by=popularity.desc&language={lang}'
-            kdrama_res = requests.get(kdrama_url, headers=TMDB_HEADERS, timeout=2.5)
-            if kdrama_res.status_code == 200:
+            kdrama_res = tmdb_get(kdrama_url, timeout=2.5)
+            if kdrama_res is not None and kdrama_res.status_code == 200:
                 kdrama_series = [
                     {
                         'id': str(t.get('id', '')),
@@ -992,7 +1042,10 @@ def get_home():
             'data': sections_list
         }
 
-        set_cached(CACHE_KEY, result)
+        if trending_movies and trending_tv:
+            set_cached(CACHE_KEY, result)
+        else:
+            print('⚠️ Home cache skipped — core sections incomplete (TMDB throttling?)')
         return jsonify(result)
 
     except Exception as e:
@@ -1068,9 +1121,10 @@ def get_catalog():
 
     try:
         discover_url = f'{TMDB_BASE_URL}/discover/{tmdb_type}'
-        res = requests.get(discover_url, params=discover_params, headers=TMDB_HEADERS, timeout=4)
-        if res.status_code != 200:
-            return jsonify({'status': 'error', 'message': f'TMDB returned {res.status_code}'}), 502
+        res = tmdb_get(discover_url, params=discover_params, timeout=4)
+        if res is None or res.status_code != 200:
+            code = res.status_code if res is not None else 'network-error'
+            return jsonify({'status': 'error', 'message': f'TMDB returned {code}'}), 502
 
         data = res.json()
         results = data.get('results', [])
@@ -1145,10 +1199,10 @@ def search():
 
     try:
         search_url = f'{TMDB_BASE_URL}/search/multi?api_key={TMDB_API_KEY}&query={quote(query)}&language={lang}'
-        res = requests.get(search_url, headers=TMDB_HEADERS, timeout=5)
+        res = tmdb_get(search_url, timeout=5)
 
-        if res.status_code != 200:
-            return jsonify({'status': 'success', 'data': []})
+        if res is None or res.status_code != 200:
+            return jsonify({'status': 'success', 'data': [], 'partial': True})
 
         items = []
         for item in res.json().get('results', []):
@@ -1186,12 +1240,12 @@ def search():
                 })
 
         result = {'status': 'success', 'data': items}
-        set_cached(cache_key, result)
+        set_cached(cache_key, result, ttl=(24 * 3600) if items else 3600)
         return jsonify(result)
 
     except Exception as e:
         print(f"⚠️ Search Error: {e}")
-        return jsonify({'status': 'success', 'data': []})
+        return jsonify({'status': 'success', 'data': [], 'partial': True})
 
 
 # ==============================================================================
@@ -1488,6 +1542,17 @@ def handle_page_cache():
         # (افتراضي 48 ساعة — الصفوف الهجينة تطلب 12 ساعة كي تتجدد سريعاً).
         bundle = data.get('data') if isinstance(data.get('data'), dict) else None
 
+        def _bundle_is_hollow(b):
+            if not b:
+                return True
+            inner_items = b.get('items')
+            if isinstance(inner_items, list) and not inner_items:
+                return True
+            return False
+
+        if not target_url and (bundle is None or _bundle_is_hollow(bundle)):
+            return jsonify({'status': 'error', 'message': 'Rejected: refusing to cache empty payload'}), 400
+
         if cache_key and (target_url or bundle is not None):
             payload = {
                 'url': target_url or '',
@@ -1510,5 +1575,3 @@ def handle_page_cache():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
-
-
