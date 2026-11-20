@@ -72,12 +72,20 @@ TMDB_HEADERS = {
     'Accept': 'application/json',
 }
 
+# ==============================================================================
+# 🛡️ v13.6 — TMDB Hardened Fetch: إعادة محاولة واحدة محترمة على 429/5xx
+# ==============================================================================
+# السبب: دوال Vercel تخرج من IPs مشتركة، وCDN لدى TMDB يفرض ~50 طلب/ث و20
+# اتصالاً لكل IP. في الذروة تُرفض الطلبات لحظياً بـ429 — إعادة محاولة واحدة
+# (بسقف انتظار 1.5 ث حتراماً لـ Retry-After) تقلب معظم حالات الفشل، بينما
+# بلاها كانت الصفحات 2+ من الكتالوج "تنتهي" عند أول 429 ويوقف التطبيق
+# التمرير نهائياً.
 
-TMDB_RETRY_MAX_WAIT = 1.5  # seconds
+TMDB_RETRY_MAX_WAIT = 1.5  # ثانية — سقف انتظار Retry-After (يحمي زمن البرودة)
 
 
 def tmdb_get(url, params=None, timeout=4):
-    """TMDB request with one polite retry on 429/5xx."""
+    """طلب TMDB مع إعادة محاولة واحدة ذكية عند 429/5xx. يرجع response أو None."""
     try:
         res = requests.get(url, params=params, headers=TMDB_HEADERS, timeout=timeout)
     except Exception as e:
@@ -214,7 +222,7 @@ def get_vault_session(site_key, target_url):
                 "Referer": f"{target_url.rstrip('/')}/"
             }
 
-                        # v13.6: 45 دقيقة بدل ساعتين — جلسة ميتة كانت تعطّل الكشط
+            # v13.6: 45 دقيقة بدل ساعتين — جلسة ميتة كانت تعطّل الكشط
             # على أجهزة كل المستخدمين حتى ساعتين كاملتين.
             set_cached(cache_key, vault_data, ttl=45 * 60)
             return vault_data
@@ -332,7 +340,7 @@ def fetch_tmdb_series_meta(clean_tmdb_id, lang='ar-SA'):
 def index():
     return jsonify({
         'status': 'online',
-        'mode': 'Tiered Architecture (Phase 1) — TMDB-only metadata + Android-side scraping (v13.5: hybrid catalog rows + vidfast/vidcore staged recipes)',
+        'mode': 'Tiered Architecture (Phase 1) — TMDB-only metadata + Android-side scraping (v13.6: hardened cache + retry ladder + arabic rows fix)',
         'tls_impersonate': 'Chrome 124 (Active)' if HAS_CURL_CFFI else 'Standard Requests',
         'active_domains': {
             'akwam': AKWAM_BASE_DOMAIN,
@@ -738,11 +746,7 @@ def get_config():
                 r'\s+(كامل|كاملة|جميع الحلقات|اون لاين|أون لاين|مترجم|مترجمة|مدبلج|مدبلجة|بالمصري|HD|4K|HD264|webrip|بجودة عالية)\s*$',
                 r'\s+(كامل|كاملة|جميع الحلقات|اون لاين|أون لاين|مترجم|مترجمة|مدبلج|مدبلجة|بالمصري|HD|4K|webdl|blu-ray)\b',
             ],
-
-
-
-            
-           'rows': [
+            'rows': [
                 {
                     # v13.6: مسار المسلسلات المخصص بدل خلاطة newvideos1 —
                     # كان الفلتر العربي ينجو منها بـ5-10 بطاقات فقط لكل
@@ -771,8 +775,6 @@ def get_config():
                     ],
                 },
                 {
-                    # يبقى على newvideos1 عمداً: خلاطة المختلط هي المصدر
-                    # الصحيح للفلتر الانتقائي (مسلسل.*مترجم) — موثق حياً.
                     'key': 'turkish_drama',
                     'title_ar': 'دراما تركية',
                     'title_en': 'Turkish Drama',
@@ -796,21 +798,8 @@ def get_config():
                     ],
                 },
             ],
-        
-        
         },
-        
-
-
-
-
-        
     })
-
-
-
-
-
 
 
 # ==============================================================================
@@ -835,6 +824,8 @@ def get_home():
         kdrama_series = []
 
         try:
+            # v13.6: عبر tmdb_get — مهلة/429 عابرة كانت تُسقط قسماً
+            # كاملاً ثم يُخزّن الناقص 6 ساعات لكل المستخدمين.
             m_res = tmdb_get(
                 f'{TMDB_BASE_URL}/trending/movie/week?api_key={TMDB_API_KEY}&language={lang}',
                 timeout=2.5
@@ -1042,6 +1033,10 @@ def get_home():
             'data': sections_list
         }
 
+        # v13.6 — بوابة نظافة الكاش: لا نُخزّن إلا إذا نجح القسمان الأساسيان
+        # (trending دائماً ممتلئ عند TMDB؛ فراغه = فشل). النتيجة الناقصة
+        # تُرجَع للطالب دون تخزين فيعيد المستخدم التالي المحاولة فوراً، بدل
+        # تقديم رئيسية منقوصة لكل المستخدمين 6 ساعات.
         if trending_movies and trending_tv:
             set_cached(CACHE_KEY, result)
         else:
@@ -1121,6 +1116,8 @@ def get_catalog():
 
     try:
         discover_url = f'{TMDB_BASE_URL}/discover/{tmdb_type}'
+        # v13.6: إعادة محاولة واحدة محترمة قبل إعلان 502 — أول 429 عابرة
+        # كانت تقتل الصفحة 2+ ويظن التطبيق أنها نهاية القائمة فيوقف التمرير.
         res = tmdb_get(discover_url, params=discover_params, timeout=4)
         if res is None or res.status_code != 200:
             code = res.status_code if res is not None else 'network-error'
@@ -1199,9 +1196,13 @@ def search():
 
     try:
         search_url = f'{TMDB_BASE_URL}/search/multi?api_key={TMDB_API_KEY}&query={quote(query)}&language={lang}'
+        # v13.6: إعادة محاولة واحدة — كان فشل TMDB يعني سقوط كل مطابقات
+        # الصف العربي جماعياً في أوقات الذروة (حتى 80 استعلاماً/جلسة).
         res = tmdb_get(search_url, timeout=5)
 
         if res is None or res.status_code != 200:
+            # v13.6: فشل الشبكة ≠ «لا نتائج» — partial:true يتيح للتطبيق
+            # (v3.1.74) إعادة المحاولة بدل اعتباره نهائياً. متوافق رجعياً.
             return jsonify({'status': 'success', 'data': [], 'partial': True})
 
         items = []
@@ -1240,6 +1241,9 @@ def search():
                 })
 
         result = {'status': 'success', 'data': items}
+        # v13.6: النتائج الممتلئة تُخزّن 24 ساعة (كانت 6) لتخفيف ضغط TMDB
+        # من المطابقة العكسية؛ الفارغة ساعة واحدة فقط كي لا تُدفن مطابقة
+        # فاشلة طويلاً.
         set_cached(cache_key, result, ttl=(24 * 3600) if items else 3600)
         return jsonify(result)
 
@@ -1542,6 +1546,9 @@ def handle_page_cache():
         # (افتراضي 48 ساعة — الصفوف الهجينة تطلب 12 ساعة كي تتجدد سريعاً).
         bundle = data.get('data') if isinstance(data.get('data'), dict) else None
 
+        # v13.6 — سدّ ثقب تسميم الكاش الجماعي: كان أي جهاز يفشل كشطه
+        # يخزّن حزمة فارغة تُقدّم لكل المستخدمين حتى 48 ساعة. الآن:
+        # بلا رابط وبلا حزمة ذات معنى → رفض التخزين فوراً.
         def _bundle_is_hollow(b):
             if not b:
                 return True
@@ -1575,3 +1582,4 @@ def handle_page_cache():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
+
